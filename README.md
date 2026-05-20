@@ -118,28 +118,28 @@ VITE_AMAP_SECURITY_SERVICE_HOST=
 ### 1. 安装并启动后端
 
 ```powershell
-cd C:\Users\123\Desktop\LLM-Homework\backend
+cd .\backend
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8002
 ```
 
 后端地址：
 
 ```text
-http://localhost:8000
+http://localhost:8002
 ```
 
 健康检查：
 
 ```text
-http://localhost:8000/health
+http://localhost:8002/health
 ```
 
 ### 2. 安装并启动前端
 
 ```powershell
-cd C:\Users\123\Desktop\LLM-Homework\frontend
+cd .\frontend
 npm.cmd install
 npm.cmd run dev
 ```
