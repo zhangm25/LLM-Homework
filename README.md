@@ -89,6 +89,8 @@ MAP_API_KEY=你的高德Web服务Key
 - 前端 JS API Key 不能直接当作后端 Web 服务 Key 使用。
 - `LLM_API_KEY` 是可选的；如果不配置，后端会使用规则解析兜底。
 
+可以在https://lbs.amap.com/?ref=https://console.amap.com/dev/index 网站注册账号并免费获得key
+
 ### 前端配置
 
 文件位置：
@@ -110,6 +112,8 @@ VITE_AMAP_SECURITY_SERVICE_HOST=
 - `VITE_API_BASE_URL` 是前端请求后端的地址。
 - `VITE_AMAP_JS_KEY` 用于浏览器中加载高德地图。
 - 高德前端 JS Key 和后端 Web 服务 Key 是两类 Key。
+
+可以在https://lbs.amap.com/?ref=https://console.amap.com/dev/index 网站注册账号并免费获得key
 
 ## 安装和运行
 
