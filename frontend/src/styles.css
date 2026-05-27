@@ -1,0 +1,232 @@
+/* ---------------------------------------------------------------------------
+ * RoamMind design system — ported 1:1 from ui-mockup-0527.html, with a small
+ * block of additions at the bottom for the dynamic (interactive) app states.
+ * ------------------------------------------------------------------------- */
+:root{
+  --bg:#F1EDE5; --surface:#FFFFFF; --inset:#F5F2EB;
+  --ink:#211F1B; --ink-2:#6E6A62; --ink-3:#A39E94;
+  --line:#EAE4DB; --line-2:#DFD8CC;
+  --accent:#C96442; --accent-d:#AF5230; --accent-soft:#F5E7E0; --accent-bd:#EFD7CB;
+  --sage:#4F7163; --sage-soft:#E7EFEA; --sage-bd:#D6E3DC;
+  --sun:#C98A33;
+  --shadow:0 1px 2px rgba(33,31,27,.04), 0 12px 32px rgba(33,31,27,.07);
+  --shadow-sm:0 1px 2px rgba(33,31,27,.05);
+  --r:16px; --r-sm:11px;
+  --font:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:var(--font);background:var(--bg);color:var(--ink);
+  -webkit-font-smoothing:antialiased;line-height:1.55;letter-spacing:.1px;min-height:100vh}
+/* top bar */
+.topbar{display:flex;align-items:center;gap:18px;padding:15px 28px;background:var(--surface);
+  border-bottom:1px solid var(--line-2);box-shadow:0 3px 18px rgba(33,31,27,.06);position:sticky;top:0;z-index:20}
+.brand{display:flex;align-items:center;gap:9px;font-size:19px;font-weight:650;letter-spacing:.2px}
+.brand .logo{width:26px;height:26px;border-radius:8px;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--accent),#E08A5F);color:#fff;font-size:14px;box-shadow:0 4px 12px rgba(201,100,66,.35)}
+.brand small{font-weight:450;color:var(--ink-3);font-size:12.5px;margin-left:2px}
+.tagline{color:var(--ink-2);font-size:13.5px;margin-left:6px;padding-left:14px;border-left:1px solid var(--line-2)}
+.topbar .spacer{flex:1}
+.pill{font-size:12.5px;color:var(--ink-2);background:var(--inset);border:1px solid var(--line-2);
+  border-radius:999px;padding:6px 13px;max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.loc-pill{font-family:inherit;cursor:pointer}
+.loc-pill:hover{border-color:var(--accent-bd);color:var(--accent-d);background:var(--accent-soft)}
+.loc-pill:disabled{opacity:.65;cursor:wait}
+.locbox{display:flex;align-items:center;gap:8px;min-width:0}
+.manual-loc{position:relative;display:flex;align-items:center;gap:6px;background:var(--inset);border:1px solid var(--line-2);
+  border-radius:999px;padding:5px 12px}
+.manual-loc input{width:190px;border:none;outline:none;background:transparent;font-family:inherit;font-size:12.5px;color:var(--ink)}
+.manual-loc input::placeholder{color:var(--ink-3)}
+/* start-location candidate dropdown (user picks instead of us guessing) */
+.loc-menu{position:absolute;top:calc(100% + 6px);right:0;min-width:264px;max-height:320px;overflow-y:auto;
+  background:var(--surface);border:1px solid var(--line-2);border-radius:12px;box-shadow:var(--shadow);padding:5px;z-index:40}
+.loc-item{display:block;width:100%;text-align:left;background:none;border:none;border-radius:8px;padding:7px 9px;cursor:pointer;font-family:inherit}
+.loc-item:hover{background:var(--inset)}
+.loc-name{display:block;font-size:13px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.loc-addr{display:block;font-size:11px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.loc-empty{padding:9px 10px;font-size:12px;color:var(--ink-3)}
+.loc-menu::-webkit-scrollbar{width:7px}
+.loc-menu::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
+/* tab bar */
+.tabbar{max-width:1240px;margin:0 auto;padding:18px 28px 2px;display:flex;gap:9px;flex-wrap:wrap;align-items:center}
+.tabbar .lbl{font-size:12px;color:var(--ink-3);margin-right:4px}
+.tab{font-family:inherit;font-size:13.5px;font-weight:550;cursor:pointer;padding:9px 16px;border-radius:999px;
+  border:1px solid var(--line-2);background:var(--surface);color:var(--ink-2);transition:all .15s}
+.tab:hover{border-color:var(--accent-bd)}
+.tab.on{background:var(--accent);color:#fff;border-color:var(--accent);box-shadow:0 4px 12px rgba(201,100,66,.28)}
+.tab.new-chat{background:var(--accent);color:#fff;border-color:var(--accent);box-shadow:0 4px 12px rgba(201,100,66,.24)}
+.tab.new-chat:hover{background:var(--accent-d);border-color:var(--accent-d)}
+.tab:disabled{opacity:.55;cursor:not-allowed}
+/* layout */
+.layout{display:grid;grid-template-columns:minmax(360px,5fr) 7fr;gap:24px;max-width:1240px;margin:0 auto;padding:18px 28px 38px;align-items:stretch}
+/* panel title — bigger, darker, with colored dot */
+.panel-title{display:flex;align-items:center;gap:9px;font-size:14.5px;font-weight:650;color:var(--ink);margin:0 4px 13px}
+.panel-title .dot{width:9px;height:9px;border-radius:50%}
+.panel-title .dot.accent{background:var(--accent)}
+.panel-title .dot.sage{background:var(--sage)}
+.panel-title .hint{font-size:12px;font-weight:450;color:var(--ink-3);margin-left:auto}
+/* chat card */
+/* Chat is a viewport-tall, sticky column: it fills the page height and stays in
+   view while the (possibly taller) plan column scrolls. align-self:start + an
+   explicit height stop it from being stretched to the plan's height, which is
+   what used to leave the composer floating mid-card.
+   The 230px reserves room for the chrome AND the bottom footer line so it stays
+   visible: topbar(~64)+tabbar(~54)+layout padding(18+38)+footer(~53). The
+   layout's 38px bottom padding is the breathing room between the box and the
+   footer. */
+.chat{display:flex;flex-direction:column;position:sticky;top:76px;align-self:start;height:calc(100vh - 230px)}
+.chat-card{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);box-shadow:var(--shadow);
+  padding:18px;display:flex;flex-direction:column;flex:1;min-height:0}
+.stream{display:flex;flex-direction:column;gap:14px;flex:1}
+.msg{max-width:88%;opacity:0;animation:rise .5s ease forwards}
+.msg .who{font-size:11.5px;color:var(--ink-3);margin:0 4px 5px;font-weight:600;letter-spacing:.3px}
+.bubble{padding:12px 15px;border-radius:14px;font-size:14.5px}
+.msg.user{align-self:flex-end}
+.msg.user .who{text-align:right}
+.msg.user .bubble{background:var(--accent-soft);border:1px solid var(--accent-bd);border-bottom-right-radius:5px;color:#5A3322}
+.msg.bot{align-self:flex-start}
+.msg.bot .bubble{background:var(--inset);border:1px solid var(--line);border-bottom-left-radius:5px}
+.msg.bot .bubble.thinking{color:var(--ink-2);font-size:13.5px;display:flex;align-items:center;gap:9px;background:transparent;border:1px dashed var(--line-2)}
+.dot-b{width:6px;height:6px;border-radius:50%;background:var(--sage);animation:blink 1.2s infinite}
+.clarify{align-self:stretch;max-width:100%;background:var(--surface);border:1px solid var(--sage-bd);
+  border-radius:var(--r-sm);padding:14px 15px;box-shadow:var(--shadow-sm);opacity:0;animation:rise .5s ease forwards}
+.clarify-title{font-size:13.5px;font-weight:650;color:var(--ink);margin-bottom:10px}
+.clarify-options{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.choice{font-family:inherit;text-align:left;border:1px solid var(--line-2);background:var(--inset);color:var(--ink);
+  border-radius:10px;padding:10px 11px;cursor:pointer;transition:all .15s;min-width:0}
+.choice:hover{border-color:var(--sage-bd);background:var(--sage-soft)}
+.choice span{display:block;font-size:13px;font-weight:650;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.choice small{display:block;font-size:11.5px;color:var(--ink-2);line-height:1.35;margin-top:4px}
+.choice:disabled{opacity:.55;cursor:not-allowed}
+/* understanding cards */
+.understand{align-self:stretch;max-width:100%;background:var(--inset);border:1px solid var(--line);
+  border-radius:var(--r-sm);padding:15px 16px;opacity:0;animation:rise .5s ease .15s forwards}
+.u-head{display:flex;align-items:center;gap:8px;font-size:13px;font-weight:650;margin-bottom:11px}
+.u-head .ic{width:20px;height:20px;border-radius:6px;background:var(--accent-soft);color:var(--accent-d);display:grid;place-items:center;font-size:12px}
+.u-head .ic.ok{background:var(--sage-soft);color:var(--sage)}
+.u-row{display:flex;gap:8px;align-items:baseline;margin:7px 0;font-size:13px}
+.u-row .lbl{color:var(--ink-3);min-width:42px;flex-shrink:0}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-size:12px;padding:3.5px 10px;border-radius:999px;background:#fff;color:var(--sage);border:1px solid var(--sage-bd)}
+.chip.mood{color:var(--accent-d);border-color:var(--accent-bd)}
+.chip.avoid{color:var(--ink-3);border-color:var(--line-2);text-decoration:line-through;text-decoration-color:#C9C3B8}
+/* confirm card (具体型) */
+.steps{display:flex;flex-direction:column;gap:8px;margin-bottom:11px}
+.step{display:flex;gap:9px;align-items:center;font-size:13.5px}
+.step .n{width:19px;height:19px;border-radius:6px;background:#fff;border:1px solid var(--line-2);color:var(--ink-2);
+  display:grid;place-items:center;font-size:11px;font-weight:700;flex-shrink:0}
+.step.last .n{background:#EEEBE5;border-color:var(--line-2)}
+.step .n.lock{background:#EAE4F4;border-color:#D9D0EC;color:#5B4B8A}
+.cons{display:flex;flex-wrap:wrap;gap:6px;padding-top:10px;border-top:1px dashed var(--line-2)}
+.ct{font-size:11.5px;padding:3px 9px;border-radius:7px;background:#fff;border:1px solid var(--line-2);color:var(--ink-2)}
+/* composer */
+.composer{margin-top:16px;display:flex;align-items:flex-end;gap:10px;background:var(--inset);border:1px solid var(--line-2);
+  border-radius:14px;padding:9px 10px 9px 16px}
+/* default height = 2 lines (2*1.45em line-height + 14px vertical padding); fixed
+   so content beyond 2 lines scrolls inside via the styled scrollbar below */
+.composer textarea{flex:1;height:calc(2.9em + 15px);min-height:calc(2.9em + 15px);max-height:calc(2.9em + 15px);
+  border:none;outline:none;font-family:inherit;font-size:14.5px;
+  line-height:1.45;color:var(--ink);background:transparent;resize:none;overflow-y:auto;padding:7px 0}
+.composer textarea::placeholder{color:var(--ink-3)}
+.composer textarea::-webkit-scrollbar{width:7px}
+.composer textarea::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
+.icon-btn{width:36px;height:36px;border-radius:10px;border:none;cursor:pointer;display:grid;place-items:center;font-size:15px}
+.icon-btn.mic{background:#fff;border:1px solid var(--line-2);color:var(--ink-2)}
+.icon-btn.send{background:var(--accent);color:#fff;box-shadow:0 4px 12px rgba(201,100,66,.3)}
+.icon-btn:disabled{opacity:.5;cursor:not-allowed}
+/* plan */
+.plan{display:flex;flex-direction:column}
+.mapcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow);min-height:360px}
+/* empty state: fill the (stretched) plan column so it matches the chat card height */
+.mapcard-empty{flex:1;display:flex}
+.map-top{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid var(--line)}
+.map-top .t{font-size:14.5px;font-weight:650}
+.map-top .stat{font-size:12.5px;color:var(--ink-2);display:flex;gap:14px}
+.map-top .stat b{color:var(--ink);font-weight:600}
+.mapwrap{position:relative;height:300px;background:radial-gradient(120% 90% at 70% 10%,#FBFAF7 0%,#F0ECE5 100%)}
+svg.map{width:100%;height:100%;display:block}
+.route{fill:none;stroke:var(--accent);stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;
+  stroke-dasharray:1100;stroke-dashoffset:1100;animation:draw 1.9s ease .25s forwards;filter:drop-shadow(0 3px 6px rgba(201,100,66,.25))}
+.seg-route{stroke-width:4;filter:drop-shadow(0 3px 5px rgba(33,31,27,.16))}
+.road{fill:none;stroke:#E4DED3;stroke-width:5;stroke-linecap:round}
+.pin{opacity:0;animation:pop .45s cubic-bezier(.2,1.3,.5,1) forwards}
+.pin circle.bg{fill:var(--accent)} .pin circle.ring{fill:#fff}
+.pin text{fill:#fff;font-size:12.5px;font-weight:700;text-anchor:middle;font-family:var(--font)}
+.pin.ends circle.bg{fill:var(--ink)}
+.badge-disc{position:absolute;left:14px;bottom:12px;font-size:11.5px;color:var(--ink-3);background:rgba(255,255,255,.82);
+  border:1px solid var(--line);border-radius:999px;padding:4px 11px}
+.tl-title{display:flex;align-items:center;justify-content:space-between;margin:20px 2px 12px}
+.tl-title h3{font-size:15px;font-weight:650}
+.tl-title .reason{font-size:12.5px;color:var(--ink-3)}
+.timeline{display:flex;flex-direction:column;gap:11px}
+.stop{display:flex;gap:13px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);
+  padding:13px 14px;box-shadow:var(--shadow-sm);opacity:0;animation:rise .5s ease forwards}
+.stop .marker{flex-shrink:0;width:30px;height:30px;border-radius:9px;background:var(--accent-soft);color:var(--accent-d);
+  display:grid;place-items:center;font-weight:700;font-size:14px;margin-top:1px}
+.stop.end .marker{background:#EEEBE5;color:var(--ink)}
+.stop.start{background:var(--inset);border-style:dashed;box-shadow:none}
+.stop.start .marker{background:#fff;border:1px solid var(--line-2);font-size:15px}
+.stop.fixed{background:#F4F1F8;border-color:#E3DCEF}
+.stop.fixed .marker{background:#EAE4F4;color:#5B4B8A;font-size:15px}
+.feas{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;color:var(--sage);
+  background:var(--sage-soft);border:1px solid var(--sage-bd);border-radius:999px;padding:3px 10px}
+.stop .body{flex:1;min-width:0}
+.stop .l1{display:flex;align-items:baseline;gap:9px;flex-wrap:wrap}
+.stop .time{font-size:12.5px;font-weight:700;color:var(--accent-d)}
+.stop.start .time,.stop.end .time{color:var(--ink-2)}
+.stop .name{font-size:14.5px;font-weight:600}
+.stop .meta{margin-left:auto;font-size:12px;color:var(--ink-3);display:flex;gap:9px;align-items:center}
+.star{color:var(--sun);font-weight:600}
+.tag{font-size:11px;padding:2px 8px;border-radius:6px;background:var(--sage-soft);color:var(--sage)}
+.link{color:var(--accent-d);cursor:pointer}
+/* per-stop "换一个" alternatives dropdown */
+.swap-wrap{position:relative;display:inline-flex}
+.swap-menu{position:absolute;top:calc(100% + 6px);right:0;min-width:230px;max-width:300px;max-height:280px;overflow-y:auto;
+  background:var(--surface);border:1px solid var(--line-2);border-radius:11px;box-shadow:var(--shadow);padding:5px;z-index:30}
+.swap-item{display:block;width:100%;text-align:left;background:none;border:none;border-radius:8px;padding:7px 9px;cursor:pointer;font-family:inherit}
+.swap-item:hover{background:var(--inset)}
+.swap-name{display:block;font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.swap-cmeta{display:block;font-size:11px;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+.swap-menu::-webkit-scrollbar{width:7px}
+.swap-menu::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
+.stop .why{font-size:12.5px;color:var(--ink-2);margin-top:5px}
+.stop .dur{font-size:11.5px;color:var(--ink-3);margin-top:4px}
+.navbtn{margin-top:18px;width:100%;border:none;cursor:pointer;font-family:inherit;
+  background:linear-gradient(135deg,var(--accent),#D9774F);color:#fff;font-size:15px;font-weight:600;padding:15px;
+  border-radius:14px;display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:0 8px 22px rgba(201,100,66,.32);transition:transform .12s}
+.navbtn:hover{transform:translateY(-1px)} .navbtn small{font-weight:400;opacity:.85;font-size:12px}
+.navbtn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.subnote{text-align:center;font-size:11.5px;color:var(--ink-3);margin-top:9px}
+.subnote.warn{color:var(--accent-d)}
+.segment-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
+.segment-nav button{font-family:inherit;font-size:11.5px;color:var(--ink-2);background:var(--surface);
+  border:1px solid var(--line-2);border-radius:9px;padding:8px 9px;cursor:pointer;text-align:left;
+  white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.segment-nav button:hover{border-color:var(--accent-bd);color:var(--accent-d);background:var(--accent-soft)}
+.footer{max-width:1240px;margin:0 auto;padding:2px 28px 34px;color:var(--ink-3);font-size:12px;text-align:center}
+@keyframes draw{to{stroke-dashoffset:0}}
+@keyframes pop{0%{opacity:0;transform:translateY(6px) scale(.6)}100%{opacity:1;transform:none}}
+@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
+@keyframes blink{0%,100%{opacity:.3}50%{opacity:1}}
+@media (max-width:880px){.layout{grid-template-columns:1fr;gap:26px}
+  /* single column: chat flows normally instead of a sticky viewport panel */
+  .chat{position:static;height:auto}
+  .chat-card{min-height:540px}
+  .stream{max-height:calc(100vh - 240px)}}
+@media (max-width:640px){.clarify-options,.segment-nav{grid-template-columns:1fr}.map-top{align-items:flex-start;gap:8px;flex-direction:column}.map-top .stat{flex-wrap:wrap}}
+@media (max-width:760px){.topbar{align-items:flex-start;flex-wrap:wrap}.topbar .spacer{display:none}.locbox{width:100%;flex-wrap:wrap}.manual-loc{flex:1}.manual-loc input{width:100%;min-width:150px}}
+
+/* ===========================================================================
+ * Additions for the interactive app (not in the static mockup)
+ * ========================================================================= */
+html,body,#root{height:100%}
+.stream{overflow-y:auto;min-height:0;padding-right:4px}
+.stream::-webkit-scrollbar{width:7px}
+.stream::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
+/* blinking caret while a bot bubble is still streaming */
+.bubble .caret{display:inline-block;width:7px;height:15px;margin-left:1px;vertical-align:-2px;
+  background:var(--accent);border-radius:1px;animation:blink 1s step-end infinite}
+/* the real AMap canvas fills the map area */
+.map-real{position:absolute;inset:0;width:100%;height:100%}
+/* empty plan placeholder */
+.plan-empty{display:grid;place-items:center;flex:1;min-height:360px;color:var(--ink-3);font-size:13.5px;text-align:center;padding:0 30px}
+.feas-fail{color:var(--accent-d);background:var(--accent-soft);border-color:var(--accent-bd)}

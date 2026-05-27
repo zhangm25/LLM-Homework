@@ -1,0 +1,13 @@
+<svg width="64" height="64" viewBox="0 0 64 64" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="rm" x1="0" y1="0" x2="64" y2="64" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#C96442"/>
+      <stop offset="1" stop-color="#E08A5F"/>
+    </linearGradient>
+  </defs>
+  <!-- rounded tile, matching the in-app brand logo -->
+  <rect x="2" y="2" width="60" height="60" rx="15" fill="url(#rm)"/>
+  <!-- ✦ four-pointed sparkle -->
+  <path d="M32 9 L37.7 26.3 L55 32 L37.7 37.7 L32 55 L26.3 37.7 L9 32 L26.3 26.3 Z"
+        fill="#FFFFFF" stroke="#FFFFFF" stroke-width="1.5" stroke-linejoin="round"/>
+</svg>

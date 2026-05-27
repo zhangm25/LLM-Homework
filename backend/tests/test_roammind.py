@@ -1,0 +1,460 @@
+"""Regression tests for the RoamMind fixes (run: python backend/tests/test_roammind.py).
+
+No pytest dependency: a tiny runner executes every ``check_*`` coroutine/function
+and reports PASS/FAIL, exiting non-zero on any failure. A FakeAMap makes the
+grounding + scheduling deterministic and offline, so these tests don't spend
+DeepSeek/AMap quota and don't flake on the network.
+
+Each check maps to a defect found during ID/OOD testing — see the report.
+"""
+from __future__ import annotations
+
+import asyncio
+import os
+import sys
+from pathlib import Path
+
+# Force the keyless (heuristic) path for pipeline tests; AMap is faked per-test.
+os.environ["DEEPSEEK_API_KEY"] = ""
+os.environ["AMAP_WEB_SERVICE_KEY"] = ""
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # .../backend
+
+import app.planner.scheduler as sch  # noqa: E402
+from app.planner.scheduler import (  # noqa: E402
+    _base_name, _name_related, _is_landmark, _is_facility, _pick_main_poi,
+    _extract_hhmm, _haversine_m, build_plan, _date_offset, _earliest_anchor,
+    build_understanding, recompute_plan,
+)
+from app.tools.amap_client import POI, Leg  # noqa: E402
+from app.models.intent import (  # noqa: E402
+    IntentObject, Constraints, Endpoint, Task, FixedEvent, TimeWindow, ExplicitPOI,
+)
+from app.models.plan import ChatRequest  # noqa: E402
+from app.agent.pipeline import (  # noqa: E402
+    plan_stream, _is_plannable, _not_plannable_question, _merge_patch, _anchor_count,
+    _extract_intent,
+)
+
+
+# --------------------------------------------------------------------------
+# FakeAMap — deterministic, offline. Named places resolve from _GEO; "near"
+# searches return a POI at the anchor; specific keywords can be scripted.
+# --------------------------------------------------------------------------
+_GEO = {
+    "上海中心": [121.5055, 31.2353], "浦东软件园": [121.6010, 31.2030],
+    "望京": [116.4709, 39.9966], "国贸": [116.4610, 39.9088],
+    "清华大学": [116.3269, 40.0032], "五道口": [116.3373, 39.9929],
+}
+
+
+def _poi(name, loc, type_="", rating=None):
+    return POI(id=name, name=name, address="", location=list(loc), type=type_, rating=rating)
+
+
+def _hash_loc(kw: str) -> list[float]:
+    h = sum(ord(c) for c in kw)
+    return [116.40 + (h % 50) / 1000.0, 39.90 + (h % 37) / 1000.0]
+
+
+class FakeAMap:
+    enabled = True
+
+    def __init__(self, scripted: dict[str, list[POI]] | None = None):
+        self.scripted = scripted or {}
+
+    async def search_poi_text(self, keywords, region=None, types=None, page_size=10):
+        if keywords in self.scripted:
+            return self.scripted[keywords][:page_size]
+        loc = _GEO.get(keywords) or _hash_loc(keywords)
+        return [_poi(keywords, loc)]
+
+    async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                sortrule="weight", page_size=10):
+        if keywords in self.scripted:
+            return self.scripted[keywords][:page_size]
+        return [_poi(keywords, [location[0] + 0.001, location[1]], rating=4.5)]
+
+    async def _route(self, a, b, mode, kmh):
+        d = _haversine_m(a, b)
+        return Leg(mode=mode, distance_m=int(d), duration_s=int(d / (kmh * 1000 / 3600)), polyline=[a, b])
+
+    async def route_walking(self, a, b):
+        return await self._route(a, b, "walking", 5)
+
+    async def route_driving(self, a, b, waypoints=None):
+        return await self._route(a, b, "driving", 30)
+
+    async def aclose(self):
+        pass
+
+
+def use_fake(scripted=None):
+    sch.get_amap = lambda: FakeAMap(scripted)  # scheduler resolves get_amap at call time
+
+
+# --------------------------------------------------------------------------
+# Group 1 — pure POI helpers (the grounding-correctness fixes)
+# --------------------------------------------------------------------------
+def check_base_name():
+    assert _base_name("新辰里购物中心(亚运村店)") == "新辰里购物中心"
+    assert _base_name("国家体育场（鸟巢）") == "国家体育场"
+    assert _base_name("玉渊潭公园") == "玉渊潭公园"
+
+
+def check_name_related():
+    assert _name_related("玉渊潭公园", "玉渊潭公园")
+    assert _name_related("国家图书馆", "中国国家图书馆")          # contained
+    assert _name_related("新辰里购物中心", "新辰里购物中心(亚运村店)")  # branch
+    assert not _name_related("霍格沃茨魔法学校", "明月魔法学院")     # fictional -> unrelated
+    assert not _name_related("北京科技大学南门", "正宗南门涮肉(颐和园店)")
+    assert not _name_related("新辰里购物中心", "新中关购物中心")     # wrong mall
+
+
+def check_landmark_and_facility():
+    assert _is_landmark(_poi("国家体育场", [0, 0], "体育休闲服务;运动场馆;综合体育馆"))
+    assert not _is_landmark(_poi("明月魔法学院", [0, 0], "体育休闲服务;休闲场所;休闲场所"))
+    assert _is_facility(_poi("新辰里购物中心停车场(出入口)", [0, 0], "交通设施服务;停车场;停车场出入口"))
+    assert not _is_facility(_poi("新辰里购物中心(亚运村店)", [0, 0], "购物服务;商场;购物中心"))
+
+
+def check_pick_main_poi_branch():
+    # The real mall has "店" in its branch suffix; it must NOT be rejected, and a
+    # parking-lot entrance must not win.
+    cands = [
+        _poi("新辰里购物中心停车场(出入口)", [1, 1], "交通设施服务;停车场;停车场出入口"),
+        _poi("新中关购物中心", [2, 2], "购物服务;商场;购物中心"),
+        _poi("新辰里购物中心(亚运村店)", [3, 3], "购物服务;商场;购物中心"),
+    ]
+    assert _pick_main_poi("新辰里购物中心", cands).name == "新辰里购物中心(亚运村店)"
+
+
+def check_extract_hhmm():
+    assert _extract_hhmm(">=11:00") == "11:00"
+    assert _extract_hhmm("13:05前到") == "13:05"
+    assert _extract_hhmm("~黄昏") is None
+    assert _extract_hhmm(None) is None
+
+
+async def check_resolve_named_gate():
+    use_fake({
+        "霍格沃茨魔法学校": [_poi("明月魔法学院", [116.69, 39.85], "体育休闲服务;休闲场所;休闲场所")],
+        "鸟巢": [_poi("国家体育场", [116.39, 39.99], "体育休闲服务;运动场馆;综合体育馆")],
+    })
+    assert await sch._resolve_named("霍格沃茨魔法学校", "北京") == []           # gated
+    landmark = await sch._resolve_named("鸟巢", "北京")
+    assert landmark and landmark[0].name == "国家体育场"                       # alias kept
+
+
+# --------------------------------------------------------------------------
+# Group 2 — scheduling + feasibility (the routing-correctness fixes)
+# --------------------------------------------------------------------------
+def _biz_intent(meeting2_start: str) -> IntentObject:
+    return IntentObject(
+        constraints=Constraints(city="上海", start=Endpoint(type="current")),
+        tasks=[Task(id="t1", type="dining", intent="午饭", dwell_min=40),
+               Task(id="t2", type="leisure", intent="安静待着", dwell_min=30)],
+        fixed_events=[FixedEvent(title="客户会议", place="上海中心", start="10:00", end="12:00"),
+                      FixedEvent(title="项目会议", place="浦东软件园", start=meeting2_start)],
+    )
+
+
+async def check_fixed_events_scheduled():
+    use_fake()
+    plan = await build_plan(_biz_intent("14:00"), None, "上海")
+    kinds = [s.kind for s in plan.timeline]
+    names = [s.name for s in plan.timeline]
+    assert kinds.count("fixed") == 2, kinds                 # both meetings present
+    assert "上海中心 · 客户会议" in names and "浦东软件园 · 项目会议" in names
+    assert plan.timeline[0].kind == "fixed"                 # anchored by meeting, no synthetic start
+    assert plan.feasibility.ok                              # 2h gap is enough
+
+
+async def check_feasibility_conflict():
+    use_fake()
+    # Second meeting only 10 min after the first ends, with 70 min of tasks: impossible.
+    plan = await build_plan(_biz_intent("12:10"), None, "上海")
+    assert not plan.feasibility.ok, plan.feasibility.note
+    assert "赶不上" in plan.feasibility.note
+
+
+async def check_time_hint_floor():
+    use_fake()
+    intent = IntentObject(
+        constraints=Constraints(city="北京", start=Endpoint(type="current"),
+                                time_window=TimeWindow(start="08:00")),
+        tasks=[Task(id="t1", type="dining", intent="brunch", dwell_min=90,
+                    needs_poi=True, time_hint=">=11:00")],
+    )
+    plan = await build_plan(intent, [116.40, 39.90], "北京")
+    poi = [s for s in plan.timeline if s.kind == "poi"][0]
+    assert poi.time >= "11:00", f"brunch scheduled at {poi.time}, ignoring >=11:00 hint"
+
+
+async def check_time_window_overrun():
+    use_fake()
+    intent = IntentObject(
+        constraints=Constraints(city="北京", start=Endpoint(type="current"),
+                                time_window=TimeWindow(start="20:00", end="21:00")),
+        tasks=[Task(id=f"t{i}", type="sightseeing", intent=f"点{i}", dwell_min=120)
+               for i in range(1, 4)],
+    )
+    plan = await build_plan(intent, [116.40, 39.90], "北京")
+    assert not plan.feasibility.ok            # 3x120min from 20:00 can't end by 21:00
+    assert "晚" in plan.feasibility.note or "午夜" in plan.feasibility.note
+
+
+# --------------------------------------------------------------------------
+# Group 3 — pipeline robustness (the parsing/UX fixes), keyless path
+# --------------------------------------------------------------------------
+async def _stream_types(msg, scenario=None):
+    use_fake()
+    types, clar = [], None
+    async for ev in plan_stream(ChatRequest(message=msg, scenario=scenario, city="北京")):
+        types.append(ev.type)
+        if ev.type == "clarify":
+            clar = ev.text
+    return types, clar
+
+
+async def check_empty_and_noise_clarify():
+    for msg in ("", "   \n\t", "1+1等于几", "😀🍜🌆"):
+        types, _ = await _stream_types(msg)
+        assert "clarify" in types and "plan" not in types, f"{msg!r} -> {types}"
+
+
+async def check_valid_trip_plans():
+    types, _ = await _stream_types("带我去三里屯")          # place recovered -> plannable
+    assert "plan" in types, types
+
+
+async def check_preset_chip_still_replays():
+    types, _ = await _stream_types("（点了示例卡）", scenario="sc1")
+    assert "plan" in types, types
+
+
+async def check_free_text_not_hijacked_by_demo():
+    # Free text with demo keywords ("安静"+"望京") must NOT replay the canned sc1.
+    plan = None
+    use_fake()
+    async for ev in plan_stream(ChatRequest(message="今天压力好大，想去望京找个安静的地方", city="北京")):
+        if ev.type == "plan":
+            plan = ev.plan
+    if plan:  # may instead clarify (mood) — either way it must not be the canned plan
+        assert not any("Voyage" in s.name or "郎园" in s.name for s in plan.timeline)
+
+
+def check_plannable_helpers():
+    assert not _is_plannable(IntentObject())
+    assert _is_plannable(IntentObject(tasks=[Task(id="t1", type="dining")]))
+    assert _is_plannable(IntentObject(explicit_pois=[ExplicitPOI(name="三里屯")]))
+    contradiction = IntentObject(clarification_needed=["您要求特别热闹但又绝对安静，这两者矛盾，更想要哪种？"])
+    assert "矛盾" in _not_plannable_question(contradiction)   # surfaces the model's question
+    assert _not_plannable_question(IntentObject(clarification_needed=["budget_total"]))  # filters bare field names
+
+
+# --------------------------------------------------------------------------
+# Group 4 — judge round 2 fixes
+# --------------------------------------------------------------------------
+def check_dwell_clamp():
+    assert Task(id="t", dwell_min=100000).dwell_min == 360
+    assert Task(id="t", dwell_min=-5).dwell_min == 0
+    assert Task(id="t", dwell_min="abc").dwell_min == 60  # type: ignore[arg-type]
+
+
+def check_fixed_events_are_explicit():
+    only_meetings = IntentObject(fixed_events=[FixedEvent(title="会", place="上海中心", start="10:00")])
+    assert only_meetings.is_explicit                       # not the mood card
+    assert build_understanding(only_meetings).kind == "explicit"
+
+
+def check_date_and_anchor_helpers():
+    assert _date_offset("明天") == 1 and _date_offset("后天") == 2 and _date_offset("today") == 0
+    assert _date_offset("2099-01-01") > 0
+    it = IntentObject(constraints=Constraints(time_window=TimeWindow(start="09:30")),
+                      tasks=[Task(id="t1", type="dining", time_hint=">=14:00"),
+                             Task(id="t2", type="leisure", time_hint="~黄昏")])
+    assert _earliest_anchor(it) == "09:30"                 # min across window + hints
+
+
+async def check_placeholder_only_not_feasible():
+    use_fake({"霍格沃茨魔法学校": [_poi("明月魔法学院", [116.69, 39.85], "体育休闲服务;休闲场所;休闲场所")]})
+    intent = IntentObject(
+        constraints=Constraints(city="北京", start=Endpoint(type="current")),
+        explicit_pois=[ExplicitPOI(name="霍格沃茨魔法学校", fixed_order_index=0)],
+        tasks=[Task(id="t1", type="leisure", at="霍格沃茨魔法学校", explicit=True)],
+    )
+    plan = await build_plan(intent, [116.40, 39.90], "北京")
+    assert not plan.feasibility.ok and "没找到" in plan.feasibility.note
+    assert "已按真实地点" not in plan.feasibility.note      # don't claim what isn't there
+
+
+async def check_cross_city_guard():
+    use_fake({"外滩": [_poi("外滩", [121.490, 31.240])]})   # 上海, ~1000km from 北京 start
+    intent = IntentObject(
+        constraints=Constraints(city="北京", start=Endpoint(type="current")),
+        explicit_pois=[ExplicitPOI(name="外滩", fixed_order_index=0)],
+        tasks=[Task(id="t1", type="sightseeing", at="外滩", explicit=True)],
+    )
+    plan = await build_plan(intent, [116.40, 39.90], "北京")
+    assert not plan.feasibility.ok and "跨城市" in plan.feasibility.note
+
+
+async def check_no_open_hours_overclaim():
+    use_fake()
+    intent = IntentObject(constraints=Constraints(city="北京", start=Endpoint(type="current")),
+                          tasks=[Task(id="t1", type="leisure", intent="逛", at="三里屯", explicit=True)],
+                          explicit_pois=[ExplicitPOI(name="三里屯", fixed_order_index=0)])
+    plan = await build_plan(intent, [116.40, 39.90], "北京")
+    assert "营业时间" not in plan.feasibility.note          # we don't verify it, so don't say it
+
+
+def check_merge_patch_protects_itinerary():
+    prior = IntentObject(
+        constraints=Constraints(start=Endpoint(type="named", value="国贸"),
+                                end=Endpoint(type="named", value="望京")),
+        explicit_pois=[ExplicitPOI(name="三里屯", fixed_order_index=0),
+                       ExplicitPOI(name="后海", fixed_order_index=1)],
+        tasks=[Task(id="t1", type="leisure", at="三里屯", needs_poi=True, explicit=True),
+               Task(id="t2", type="sightseeing", at="后海", needs_poi=True, explicit=True)],
+    )
+    # A *change* that the model collapsed to one stop + lost start/end:
+    collapsed = IntentObject(
+        constraints=Constraints(start=Endpoint(type="current")),
+        explicit_pois=[ExplicitPOI(name="静安营业厅", fixed_order_index=0)],
+        tasks=[Task(id="t1", type="other", at="静安营业厅", needs_poi=True)],
+    )
+    merged = _merge_patch(prior, collapsed, "三里屯那个太远了，换个近一点的。")
+    assert _anchor_count(merged) >= 2                      # itinerary not destroyed
+    assert merged.constraints.start.value == "国贸"        # start preserved
+    # A *removal* is allowed to shrink, but still inherits start/end:
+    removed = IntentObject(
+        constraints=Constraints(start=Endpoint(type="current")),
+        explicit_pois=[ExplicitPOI(name="三里屯", fixed_order_index=0)],
+        tasks=[Task(id="t1", type="leisure", at="三里屯", needs_poi=True)],
+    )
+    merged2 = _merge_patch(prior, removed, "后海就不去了，去掉吧。")
+    assert merged2.constraints.start.value == "国贸" and merged2.constraints.end.value == "望京"
+    assert _anchor_count(merged2) == 1                     # shrink honoured
+
+
+def check_merge_patch_rejects_full_rewrite():
+    # The live failure: "换三里屯" -> model rewrote BOTH stops into 3× the same
+    # 国贸 restaurant. anchor_count is 3 (not a collapse), but it shares no place
+    # with the prior, so it's a rewrite, not an edit -> keep the prior plan.
+    prior = IntentObject(
+        explicit_pois=[ExplicitPOI(name="三里屯", fixed_order_index=0),
+                       ExplicitPOI(name="后海", fixed_order_index=1)],
+        tasks=[Task(id="t1", type="leisure", at="三里屯", needs_poi=True, explicit=True),
+               Task(id="t2", type="sightseeing", at="后海", needs_poi=True, explicit=True)],
+    )
+    rewrite = IntentObject(
+        explicit_pois=[ExplicitPOI(name="一个叫川的地方", fixed_order_index=i) for i in range(3)],
+        tasks=[Task(id=f"t{i}", type="dining", at="一个叫川的地方", needs_poi=True) for i in range(3)],
+    )
+    merged = _merge_patch(prior, rewrite, "三里屯那个咖啡馆太远了，换个国贸附近近一点的。")
+    assert {p.name for p in merged.explicit_pois} == {"三里屯", "后海"}   # prior kept
+
+
+async def check_dedup_consecutive_pois():
+    use_fake({"川菜": [_poi("一个叫川的地方", [116.460, 39.910], "餐饮服务;中餐厅;中餐厅")]})
+    intent = IntentObject(
+        constraints=Constraints(city="北京", start=Endpoint(type="current")),
+        tasks=[Task(id=f"t{i}", type="dining", intent="川菜", needs_poi=True) for i in range(3)],
+    )
+    plan = await build_plan(intent, [116.40, 39.90], "北京")
+    poi_stops = [s for s in plan.timeline if s.kind == "poi"]
+    assert len(poi_stops) == 1, [s.name for s in poi_stops]   # 3 identical -> 1
+
+
+async def check_patch_merge_covers_fallback_path():
+    # The merge guard must wrap BOTH the LLM and the heuristic path, because the
+    # heuristic is exactly what runs when an LLM patch times out (the live bug).
+    # Keyless here -> heuristic + merge in _extract_intent.
+    prior = IntentObject(
+        constraints=Constraints(start=Endpoint(type="named", value="国贸"),
+                                end=Endpoint(type="named", value="望京")),
+        explicit_pois=[ExplicitPOI(name="三里屯", fixed_order_index=0),
+                       ExplicitPOI(name="后海", fixed_order_index=1)],
+        tasks=[Task(id="t1", type="leisure", at="三里屯", needs_poi=True, explicit=True),
+               Task(id="t2", type="sightseeing", at="后海", needs_poi=True, explicit=True)],
+    )
+    req = ChatRequest(message="三里屯那个太远了，换个近一点的", city="北京", intent=prior)
+    intent = await _extract_intent(req)
+    assert _anchor_count(intent) >= 2 and intent.constraints.start.value == "国贸"
+
+
+async def check_alternatives_and_swap_recompute():
+    A = _poi("咖啡A", [116.41, 39.91], "餐饮服务;咖啡厅;咖啡厅", rating=4.8)
+    B = _poi("咖啡B", [116.42, 39.92], "餐饮服务;咖啡厅;咖啡厅", rating=4.5)
+    C = _poi("咖啡C", [116.43, 39.93], "餐饮服务;咖啡厅;咖啡厅", rating=4.2)
+    use_fake({"咖啡馆": [A, B, C]})
+    intent = IntentObject(
+        constraints=Constraints(city="北京", start=Endpoint(type="current"),
+                                end=Endpoint(type="named", value="望京")),
+        tasks=[Task(id="t1", type="leisure", intent="", needs_poi=True, dwell_min=60)],
+    )
+    plan = await build_plan(intent, [116.40, 39.90], "北京")
+    poi = next(s for s in plan.timeline if s.kind == "poi")
+    assert poi.name == "咖啡A"                                  # best-rated is the pick
+    assert [a.name for a in poi.alternatives] == ["咖啡B", "咖啡C"]  # the rest are alternatives
+    assert poi.dwell_min == 60
+
+    # User swaps to 咖啡B; client replaces name/location, server re-routes.
+    idx = plan.timeline.index(poi)
+    alt = poi.alternatives[0]
+    plan.timeline[idx].name, plan.timeline[idx].location, plan.timeline[idx].rating = (
+        alt.name, alt.location, alt.rating,
+    )
+    plan2 = await recompute_plan(plan.timeline, "北京", plan.intent)
+    swapped = next(s for s in plan2.timeline if s.kind == "poi")
+    assert swapped.name == "咖啡B" and swapped.location == [116.42, 39.92]
+    assert swapped.time and swapped.leg                         # times + legs recomputed
+    assert any(s.kind == "end" for s in plan2.timeline)         # rest of the route preserved
+
+
+async def check_dining_clarify_not_over_triggering():
+    # Rich, clear itinerary with a dining task -> plan, don't interrogate.
+    types, _ = await _stream_types("先去三里屯逛逛，再去南锣鼓巷吃饭，最后去后海散步")
+    assert "plan" in types, types
+    # Light, dining-led ask -> the clarify is still worth it.
+    types2, _ = await _stream_types("随便找个地方吃饭")
+    assert "clarify" in types2, types2
+
+
+# --------------------------------------------------------------------------
+# Runner
+# --------------------------------------------------------------------------
+CHECKS = [
+    check_base_name, check_name_related, check_landmark_and_facility,
+    check_pick_main_poi_branch, check_extract_hhmm, check_resolve_named_gate,
+    check_fixed_events_scheduled, check_feasibility_conflict, check_time_hint_floor,
+    check_time_window_overrun, check_empty_and_noise_clarify, check_valid_trip_plans,
+    check_preset_chip_still_replays, check_free_text_not_hijacked_by_demo,
+    check_plannable_helpers,
+    # judge round 2
+    check_dwell_clamp, check_fixed_events_are_explicit, check_date_and_anchor_helpers,
+    check_placeholder_only_not_feasible, check_cross_city_guard, check_no_open_hours_overclaim,
+    check_merge_patch_protects_itinerary, check_merge_patch_rejects_full_rewrite,
+    check_dedup_consecutive_pois, check_patch_merge_covers_fallback_path,
+    check_alternatives_and_swap_recompute, check_dining_clarify_not_over_triggering,
+]
+
+
+def main():
+    passed = failed = 0
+    for fn in CHECKS:
+        try:
+            asyncio.run(fn()) if asyncio.iscoroutinefunction(fn) else fn()
+            print(f"  PASS  {fn.__name__}")
+            passed += 1
+        except Exception as exc:
+            import traceback
+            print(f"  FAIL  {fn.__name__}: {type(exc).__name__}: {exc}")
+            traceback.print_exc()
+            failed += 1
+    print(f"\n{passed} passed, {failed} failed")
+    sys.exit(1 if failed else 0)
+
+
+if __name__ == "__main__":
+    main()
