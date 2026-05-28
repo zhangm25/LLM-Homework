@@ -49,6 +49,7 @@ DEFAULT_CITY = "北京"
 DRIVE_WALK_THRESHOLD_M = 1000  # below this, "auto" picks walking
 CANDIDATE_POOL = 8  # consider the top-N weight-ranked hits, then pick nearest
 DEFAULT_DWELL_MIN = 70
+FIRST_FIXED_BUFFER_MIN = 20
 
 # Leading verbs we strip so "吃顺德菜" -> "顺德菜", "逛逛" -> "" (place wins instead).
 _VERB_PREFIXES = ["吃个", "吃点", "喝个", "喝点", "逛个", "逛逛", "找个", "看看", "去", "到", "逛", "吃", "喝", "看", "玩", "找"]
@@ -113,6 +114,27 @@ def _place_should_be_main_destination(place: Optional[str]) -> bool:
     return bool(place and any(tok in place for tok in _MAIN_POI_TOKENS))
 
 
+def _same_named_place(a: Optional[str], b: Optional[str]) -> bool:
+    x = normalize_place_name(a)
+    y = normalize_place_name(b)
+    if not x or not y:
+        return False
+    return x == y or x in y or y in x
+
+
+def _reserved_anchor_places(intent: IntentObject) -> list[str]:
+    out = [ev.place for ev in intent.fixed_events if ev.place]
+    if intent.constraints.start.type == "named" and intent.constraints.start.value:
+        out.append(intent.constraints.start.value)
+    if intent.constraints.end and intent.constraints.end.value:
+        out.append(intent.constraints.end.value)
+    return [normalize_place_name(p) or p for p in out if p]
+
+
+def _is_reserved_anchor(place: Optional[str], anchors: list[str]) -> bool:
+    return bool(place and any(_same_named_place(place, anchor) for anchor in anchors))
+
+
 def _grounding_targets(intent: IntentObject) -> list[Target]:
     """Merge named places with activities while avoiding obvious mis-pairings.
 
@@ -120,12 +142,21 @@ def _grounding_targets(intent: IntentObject) -> list[Target]:
     not "the next named landmark is a restaurant". Keep those as place-less
     targets when a later explicit activity still needs the next named place.
     """
-    explicit = sorted(
-        intent.explicit_pois, key=lambda p: p.fixed_order_index if p.fixed_order_index is not None else 999
-    )
+    reserved = _reserved_anchor_places(intent)
+    explicit = [
+        p for p in sorted(
+            intent.explicit_pois, key=lambda p: p.fixed_order_index if p.fixed_order_index is not None else 999
+        )
+        if not _is_reserved_anchor(p.name, reserved)
+    ]
     for poi in explicit:
         poi.name = normalize_place_name(poi.name) or poi.name
-    tasks = [t for t in intent.tasks if t.needs_poi]
+    tasks = [
+        t for t in intent.tasks
+        if t.needs_poi
+        and t.type != "meeting"
+        and not _is_reserved_anchor(t.at, reserved)
+    ]
     out: list[Target] = []
     place_i = 0
     used_places: set[int] = set()
@@ -439,6 +470,37 @@ def _advance_after(clock: datetime, meta: Optional[dict], dwell: int) -> datetim
     return clock + timedelta(minutes=dwell or 0)
 
 
+def _gap_clock(meta: dict, key: str) -> Optional[datetime]:
+    return meta.get(key) or (meta.get("start") if key == "end" else None)
+
+
+def _gap_spans_lunch(prev_meta: dict, next_meta: dict) -> bool:
+    start = _gap_clock(prev_meta, "end")
+    end = _gap_clock(next_meta, "start")
+    if not start or not end:
+        return False
+    lunch_start = start.replace(hour=11, minute=0, second=0, microsecond=0)
+    lunch_end = start.replace(hour=14, minute=0, second=0, microsecond=0)
+    return start <= lunch_end and end >= lunch_start
+
+
+def _task_likely_between_fixed(task: Optional[Task], prev_meta: dict, next_meta: dict) -> bool:
+    if task is None:
+        return False
+    text = task.intent or ""
+    hint = _extract_hhmm(task.time_hint)
+    if hint:
+        hint_dt = _parse_clock(hint, _gap_clock(prev_meta, "end") or datetime.now())
+        start = _gap_clock(prev_meta, "end") or _gap_clock(prev_meta, "start")
+        end = _gap_clock(next_meta, "start")
+        return bool(start and end and start <= hint_dt <= end)
+    if task.type == "dining" and (_gap_spans_lunch(prev_meta, next_meta) or any(k in text for k in ("午饭", "午餐", "中午"))):
+        return True
+    if any(k in text for k in ("会间", "中间", "安静", "待", "休息", "咖啡", "半小时")):
+        return True
+    return False
+
+
 async def _resolve_stop(
     place: Optional[str], task: Optional[Task], prev_loc: list[float],
     city: str, marker: str, amap_on: bool,
@@ -543,14 +605,40 @@ async def build_plan(
     # --- assemble the ordered timeline -----------------------------------
     items: list[PlanItem] = []
     if has_fixed:
-        # The day is anchored by the meeting(s); we don't synthesise a "from
-        # current location" start. Tasks land between the first and last anchor
-        # — exactly the "中间帮我安排" case.
+        # Fixed events split the day into windows. If the user named a start
+        # (e.g. hotel), include it before the first meeting and later backsolve
+        # its departure time from the first hard anchor.
+        if start_named:
+            items.append((
+                Stop(kind="start", marker="📍", time="",
+                     name=start.value,
+                     location=start_loc,
+                     open_info="📍 " + start.value,
+                     why="按你给的出发点出发。"),
+                0, None, None,
+            ))
         items.append((fixed_stops[0][0], 0, fixed_stops[0][1], None))
-        for (stop, dwell), (_, task) in zip(task_stops, targets):
+        task_items = list(zip(task_stops, targets))
+        task_i = 0
+        for fixed_i in range(1, len(fixed_stops)):
+            prev_meta = fixed_stops[fixed_i - 1][1]
+            next_stop, next_meta = fixed_stops[fixed_i]
+            while task_i < len(task_items):
+                (stop, dwell), (_, task) = task_items[task_i]
+                if not _task_likely_between_fixed(task, prev_meta, next_meta):
+                    break
+                items.append((stop, dwell, None, _extract_hhmm(task.time_hint) if task else None))
+                task_i += 1
+            items.append((next_stop, 0, next_meta, None))
+        for (stop, dwell), (_, task) in task_items[task_i:]:
             items.append((stop, dwell, None, _extract_hhmm(task.time_hint) if task else None))
-        for stop, meta in fixed_stops[1:]:
-            items.append((stop, 0, meta, None))
+        end = intent.constraints.end
+        if end and end.value:
+            items.append((
+                Stop(kind="end", marker="🏠", time="", name=f"回 {end.value}",
+                     location=await _geocode(end.value, city), why="顺路到终点，结束今天的行程。"),
+                0, None, _extract_hhmm(intent.constraints.time_window.end),
+            ))
     else:
         items.append((
             Stop(kind="start", marker="📍", time="",
@@ -567,7 +655,7 @@ async def build_plan(
             items.append((
                 Stop(kind="end", marker="🏠", time="", name=f"回 {end.value}",
                      location=await _geocode(end.value, city), why="顺路到终点，结束今天的行程。"),
-                0, None, None,
+                0, None, _extract_hhmm(intent.constraints.time_window.end),
             ))
 
     return await _finalize(intent, items, base, start_clock_src, city)
@@ -593,10 +681,29 @@ async def _finalize(
     prev_stop: Optional[Stop] = None
     prev_index = 0
 
+    async def _depart_for_next_fixed(first_stop: Stop) -> Optional[datetime]:
+        next_fixed = next(
+            ((s, m) for s, _, m, _ in items[1:] if m and m.get("start")),
+            None,
+        )
+        if not next_fixed:
+            return None
+        next_stop, next_meta = next_fixed
+        if first_stop.location and next_stop.location:
+            leg, _ = await _leg_for(first_stop.location, next_stop.location)
+            travel = timedelta(seconds=leg.duration_s if leg else 15 * 60)
+        else:
+            travel = timedelta(minutes=15)
+        return next_meta["start"] - travel - timedelta(minutes=FIRST_FIXED_BUFFER_MIN)
+
     for i, (stop, dwell, meta, floor) in enumerate(items):
         if i == 0:
             if meta and meta["start"]:
                 clock = meta["start"]
+            else:
+                depart = await _depart_for_next_fixed(stop)
+                if depart:
+                    clock = depart
             stop.time = _fixed_label(meta) if meta else clock.strftime("%H:%M")
             clock = _advance_after(clock, meta, dwell)
             stops.append(stop)
@@ -637,7 +744,13 @@ async def _finalize(
         if meta and meta["start"]:  # arriving at a hard anchor: must not be late
             arrival = clock
             if arrival > meta["start"]:
-                issues.append(f"赶不上「{stop.name}」：约 {arrival.strftime('%H:%M')} 到，{meta['start'].strftime('%H:%M')} 开始")
+                if prev_stop and prev_stop.kind == "poi":
+                    issues.append(
+                        f"「{prev_stop.name}」后赶不上「{stop.name}」：约 {arrival.strftime('%H:%M')} 到，"
+                        f"{meta['start'].strftime('%H:%M')} 开始；请点该站「换一个」选更近或更省时的地点"
+                    )
+                else:
+                    issues.append(f"赶不上「{stop.name}」：约 {arrival.strftime('%H:%M')} 到，{meta['start'].strftime('%H:%M')} 开始")
                 stop.leg = f"{text} · ⚠ 约 {arrival.strftime('%H:%M')} 到，已晚"
             else:
                 buf = int((meta["start"] - arrival).total_seconds() // 60)
@@ -648,8 +761,11 @@ async def _finalize(
             if floor:  # respect ">=11:00" style hints: wait, don't arrive early
                 floor_dt = _parse_clock(floor, clock)
                 if clock < floor_dt:
+                    if stop.kind == "end":
+                        text += f" · 可按 {floor} 抵达"
+                    else:
+                        text += f" · 等到 {floor} 再开始"
                     clock = floor_dt
-                    text += f" · 等到 {floor} 再开始"
             stop.time = clock.strftime("%H:%M")
             suffix = f" · 停留约 {dwell} min" if stop.kind == "poi" and dwell else ""
             stop.leg = text + suffix

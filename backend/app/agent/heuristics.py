@@ -92,11 +92,16 @@ _START_AT_RE = re.compile(
     r"(?:我现在在|现在在|我在|目前在|人在)([一-龥A-Za-z0-9·]{2,16}?)(?:出发|附近|这边|这儿|，|,|。|；|;| |想|要|准备|打算|$)"
 )
 _START_FROM_RE = re.compile(r"从([一-龥A-Za-z0-9·]{2,16}?)出发")
+_START_EXPLICIT_RE = re.compile(r"(?:起点|出发点)(?:是|在|为|=|：|:)\s*([^\n，,。；;]{2,48}?)\s*(?:\n|$)")
+_START_ARRIVE_RE = re.compile(r"(?:到达|抵达|住在|入住)([一-龥A-Za-z0-9·]{2,32}?(?:酒店|宾馆|民宿|公寓|住处|公司))")
 _VAGUE_PLACES = {"这里", "这儿", "那里", "附近", "家里"}
 # "去X" / "到X" place mentions (X stops before an activity verb or punctuation).
 _GOTO_RE = re.compile(r"(?:去|到)([一-龥A-Za-z0-9·]{2,18}?)(?:逛|玩|看|吃|喝|散步|附近|接|带|睡觉|，|,|。|；|;| |的|$)")
 _VISIT_AT_RE = re.compile(r"(?:去一下|去下|到)([一-龥A-Za-z0-9·]{2,18}?)(?:，|,|。|；|;| |再|然后|$)")
 _END_RE = re.compile(r"(?:最后)?(?:回到|回)([一-龥A-Za-z0-9·]{2,18}?)(?:睡觉|休息|的家|家|，|,|。|；|;| |$)")
+_END_EXPLICIT_RE = re.compile(
+    r"(?:终点|终点地址|目的地|家|住处)(?:是|在|为|=|：|:)\s*([^\n，,。；;]{2,48}?)\s*(?:\n|$)"
+)
 _PICKUP_AT_RE = re.compile(
     r"(?:中途)?(?:去|到)([一-龥A-Za-z0-9·]{2,18}?)(?:接一下|接下|接上|接我|接)(?:我)?(?:的)?(?:女朋友|男朋友|朋友|同学|家人|人)?"
 )
@@ -119,6 +124,10 @@ _PLACE_SPLIT_MARKERS = (
     "接一下", "接下", "接上", "接我", "接女朋友", "接男朋友", "接朋友",
     "带上", "带我", "和我", "跟我", "一起", "然后", "再去", "顺便",
 )
+_CN_HOUR = {
+    "零": 0, "〇": 0, "一": 1, "二": 2, "两": 2, "三": 3, "四": 4, "五": 5,
+    "六": 6, "七": 7, "八": 8, "九": 9, "十": 10, "十一": 11, "十二": 12,
+}
 
 
 def _clean_place_name(name: str) -> str:
@@ -132,7 +141,7 @@ def augment_intent(intent: IntentObject, message: str) -> IntentObject:
     text = message or ""
 
     if not (intent.constraints.start.type == "named" and intent.constraints.start.value):
-        m = _START_AT_RE.search(text) or _START_FROM_RE.search(text)
+        m = _START_EXPLICIT_RE.search(text) or _START_AT_RE.search(text) or _START_FROM_RE.search(text) or _START_ARRIVE_RE.search(text)
         if m:
             value = m.group(1).strip()
             if value and value not in _VAGUE_PLACES:
@@ -147,6 +156,10 @@ def augment_intent(intent: IntentObject, message: str) -> IntentObject:
         end_value = _extract_end_value(text)
         if end_value:
             intent.constraints.end = Endpoint(type="named", value=end_value, source="nl_extract")
+    if not intent.constraints.time_window.end:
+        end_time = _extract_return_time(text)
+        if end_time:
+            intent.constraints.time_window.end = end_time
 
     recovered = _recover_ordered_places(text, intent.constraints.start.value)
     if recovered and (not intent.explicit_pois or _places_look_noisy(intent.explicit_pois)):
@@ -172,11 +185,33 @@ def augment_intent(intent: IntentObject, message: str) -> IntentObject:
 
 
 def _extract_end_value(text: str) -> str | None:
-    m = _END_RE.search(text or "")
+    m = _END_EXPLICIT_RE.search(text or "") or _END_RE.search(text or "")
     if not m:
         return None
     value = normalize_place_name(m.group(1).strip(" 的个家"))
     return value or None
+
+
+def _extract_return_time(text: str) -> str | None:
+    s = text or ""
+    if not any(k in s for k in ("回", "返回")):
+        return None
+    m = re.search(r"(?:晚上|晚间|夜里)?\s*(\d{1,2})(?::(\d{2}))?\s*点.*?(?:回到|回|返回)", s)
+    if m:
+        h = int(m.group(1))
+        if "晚上" in m.group(0) and 1 <= h <= 11:
+            h += 12
+        mn = int(m.group(2) or 0)
+        return f"{h:02d}:{mn:02d}" if 0 <= h <= 23 and 0 <= mn <= 59 else None
+    m = re.search(r"(?:晚上|晚间|夜里)\s*([一二两三四五六七八九十]{1,2})点.*?(?:回到|回|返回)", s)
+    if m:
+        h = _CN_HOUR.get(m.group(1))
+        if h is None:
+            return None
+        if 1 <= h <= 11:
+            h += 12
+        return f"{h:02d}:00"
+    return None
 
 
 def _recover_ordered_places(text: str, start_val: str | None) -> list[str]:

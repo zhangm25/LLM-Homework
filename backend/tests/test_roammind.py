@@ -42,13 +42,15 @@ from app.agent.pipeline import (  # noqa: E402
 # --------------------------------------------------------------------------
 _GEO = {
     "上海中心": [121.5055, 31.2353], "浦东软件园": [121.6010, 31.2030],
+    "上海中心大厦": [121.5055, 31.2353], "上海瑞金洲际酒店": [121.4660, 31.2160],
+    "上海锦江汤臣洲际大酒店": [121.5350, 31.2350],
     "望京": [116.4709, 39.9966], "国贸": [116.4610, 39.9088],
     "清华大学": [116.3269, 40.0032], "五道口": [116.3373, 39.9929],
 }
 
 
-def _poi(name, loc, type_="", rating=None):
-    return POI(id=name, name=name, address="", location=list(loc), type=type_, rating=rating)
+def _poi(name, loc, type_="", rating=None, address=""):
+    return POI(id=name, name=name, address=address, location=list(loc), type=type_, rating=rating)
 
 
 def _hash_loc(kw: str) -> list[float]:
@@ -177,6 +179,100 @@ async def check_feasibility_conflict():
     assert "赶不上" in plan.feasibility.note
 
 
+async def check_optional_between_meetings_does_not_break_fixed_event():
+    use_fake()
+    intent = IntentObject(
+        constraints=Constraints(city="上海", start=Endpoint(type="current")),
+        tasks=[Task(id="t1", type="leisure", intent="安静待着", dwell_min=180)],
+        fixed_events=[
+            FixedEvent(title="客户会议", place="上海中心", start="10:00", end="12:00"),
+            FixedEvent(title="项目会议", place="浦东软件园", start="14:00"),
+        ],
+    )
+    plan = await build_plan(intent, None, "上海")
+    assert not plan.feasibility.ok, plan.feasibility.note
+    assert "赶不上" in plan.feasibility.note and "换一个" in plan.feasibility.note
+    assert [s.kind for s in plan.timeline].count("fixed") == 2
+    assert any(s.kind == "poi" for s in plan.timeline)
+
+
+async def check_business_day_keeps_lunch_between_meetings_and_starts_at_hotel():
+    use_fake()
+    intent = IntentObject(
+        constraints=Constraints(
+            city="上海",
+            start=Endpoint(type="named", value="上海锦江汤臣洲际大酒店"),
+            end=Endpoint(type="named", value="上海锦江汤臣洲际大酒店"),
+            time_window=TimeWindow(end="21:00"),
+        ),
+        explicit_pois=[
+            ExplicitPOI(name="上海中心大厦", fixed_order_index=0),
+            ExplicitPOI(name="上海瑞金洲际酒店", fixed_order_index=1),
+            ExplicitPOI(name="上海锦江汤臣洲际大酒店", fixed_order_index=2),
+        ],
+        tasks=[
+            Task(id="m1", type="meeting", intent="第一个会", at="上海中心大厦", dwell_min=120, needs_poi=True, explicit=True),
+            Task(id="t1", type="dining", intent="吃饭", dwell_min=60, needs_poi=True),
+            Task(id="m2", type="meeting", intent="另一个会", at="上海瑞金洲际酒店", dwell_min=60, needs_poi=True, explicit=True),
+            Task(id="t2", type="leisure", intent="出去玩一下", dwell_min=70, needs_poi=True),
+        ],
+        fixed_events=[
+            FixedEvent(title="第一个会", place="上海中心大厦", start="09:00", end="11:00"),
+            FixedEvent(title="另一个会", place="上海瑞金洲际酒店", start="13:00"),
+        ],
+    )
+    plan = await build_plan(intent, None, "上海")
+    names = [s.name for s in plan.timeline]
+    kinds = [s.kind for s in plan.timeline]
+    assert plan.feasibility.ok, plan.feasibility.note
+    assert "赶不上" not in plan.feasibility.note and "未加入" not in plan.feasibility.note
+    assert kinds[0] == "start" and names[0] == "上海锦江汤臣洲际大酒店"
+    assert plan.timeline[0].time <= "08:40"
+    assert sum(1 for s in plan.timeline if "上海中心大厦" in s.name) == 1
+    assert sum(1 for s in plan.timeline if "上海瑞金洲际酒店" in s.name) == 1
+    first_meeting = next(i for i, s in enumerate(plan.timeline) if "第一个会" in s.name)
+    second_meeting = next(i for i, s in enumerate(plan.timeline) if "另一个会" in s.name)
+    lunch = next(i for i, s in enumerate(plan.timeline) if first_meeting < i < second_meeting and s.kind == "poi")
+    play = next(i for i, s in enumerate(plan.timeline) if i > second_meeting and s.kind == "poi")
+    end = next(i for i, s in enumerate(plan.timeline) if s.kind == "end")
+    assert first_meeting < lunch < second_meeting < play < end
+    assert plan.timeline[end].time == "21:00"
+
+
+async def check_llm_path_is_augmented_with_return_endpoint_and_time():
+    from app.agent.pipeline import _extract_intent_llm
+
+    class FakeLLM:
+        enabled = True
+
+        async def complete_json(self, system, user, temp):
+            return {
+                "city": "上海",
+                "start": {"place": None, "transport_hint": None},
+                "end": {"place": None},
+                "segments": [],
+                "date": "tomorrow",
+                "time_window": {},
+                "fixed_events": [
+                    {"title": "第一个会", "place": "上海中心大厦", "start": "09:00", "end": "11:00"},
+                    {"title": "另一个会", "place": "上海瑞金洲际酒店", "start": "13:00", "end": None},
+                ],
+                "clarification_needed": [],
+            }
+
+    req = ChatRequest(
+        message="明天到达上海锦江汤臣洲际大酒店，早上九点到上海中心大厦开会，下午一点在上海瑞金洲际酒店有另一个会，晚上九点回到上海锦江汤臣洲际大酒店。",
+        city="上海",
+    )
+    intent = await _extract_intent_llm(req, FakeLLM())
+    # Simulate the public _extract_intent post-processing path.
+    from app.agent.heuristics import augment_intent
+    intent = augment_intent(intent, req.message)
+    assert intent.constraints.start.value == "上海锦江汤臣洲际大酒店"
+    assert intent.constraints.end and intent.constraints.end.value == "上海锦江汤臣洲际大酒店"
+    assert intent.constraints.time_window.end == "21:00"
+
+
 async def check_time_hint_floor():
     use_fake()
     intent = IntentObject(
@@ -214,6 +310,17 @@ async def _stream_types(msg, scenario=None):
         if ev.type == "clarify":
             clar = ev.text
     return types, clar
+
+
+async def _stream_clarify(msg, scripted=None):
+    use_fake(scripted)
+    types, clar, options = [], None, []
+    async for ev in plan_stream(ChatRequest(message=msg, city="北京")):
+        types.append(ev.type)
+        if ev.type == "clarify":
+            clar = ev.text
+            options = ev.options
+    return types, clar, options
 
 
 async def check_empty_and_noise_clarify():
@@ -421,6 +528,60 @@ async def check_dining_clarify_not_over_triggering():
     assert "clarify" in types2, types2
 
 
+async def check_ambiguous_home_end_clarifies():
+    # "望京的家" is an area + private referent, not a navigable endpoint.
+    types, clar = await _stream_types("下午先去南锣鼓巷逛逛，然后吃饭，晚上回望京的家")
+    assert "clarify" in types and "plan" not in types, types
+    assert clar and "望京的家" in clar and "具体终点" in clar
+
+    # A bare area after "return" is also not enough for navigation.
+    types_area, clar_area = await _stream_types("下午先去南锣鼓巷逛逛，晚上回望京")
+    assert "clarify" in types_area and "plan" not in types_area, types_area
+    assert clar_area and "望京" in clar_area and "具体终点" in clar_area
+
+    # Generic return commands should ask where "home/back" actually is.
+    types2, clar2 = await _stream_types("下午逛逛公园，晚上回去")
+    assert "clarify" in types2 and "plan" not in types2, types2
+    assert clar2 and "回去" in clar2 and "具体终点" in clar2
+
+
+async def check_named_hotel_end_does_not_clarify():
+    # A full hotel POI name is navigable; don't confuse it with "the hotel in Wangjing".
+    types, _ = await _stream_types("下午先去南锣鼓巷逛逛，晚上回北京望京凯悦酒店")
+    assert "plan" in types and "clarify" not in types, types
+
+
+async def check_school_endpoint_choice_clarify():
+    scripted = {
+        "中国科学院大学": [
+            _poi("中国科学院大学(雁栖湖校区)", [116.680, 40.410], "科教文化服务;学校;高等院校", address="北京市怀柔区怀北镇"),
+            _poi("中国科学院大学(玉泉路校区)", [116.250, 39.910], "科教文化服务;学校;高等院校", address="北京市石景山区玉泉路"),
+        ]
+    }
+    types, clar, options = await _stream_clarify("下午先去南锣鼓巷逛逛，晚上回中国科学院大学", scripted)
+    assert "clarify" in types and "plan" not in types, types
+    assert clar and "中国科学院大学" in clar and "终点" in clar
+    assert len(options) == 2
+    assert "雁栖湖校区" in options[0].label and "怀柔" in options[0].description
+
+    # Clicking a concrete campus should continue planning, not ask the same question again.
+    types2, _, _ = await _stream_clarify(options[0].message, scripted)
+    assert "plan" in types2 and "clarify" not in types2, types2
+
+
+async def check_school_start_choice_clarify():
+    scripted = {
+        "中国科学院大学": [
+            _poi("中国科学院大学(雁栖湖校区)", [116.680, 40.410], "科教文化服务;学校;高等院校", address="北京市怀柔区怀北镇"),
+            _poi("中国科学院大学(玉泉路校区)", [116.250, 39.910], "科教文化服务;学校;高等院校", address="北京市石景山区玉泉路"),
+        ]
+    }
+    types, clar, options = await _stream_clarify("从中国科学院大学出发，去三里屯逛逛", scripted)
+    assert "clarify" in types and "plan" not in types, types
+    assert clar and "中国科学院大学" in clar and "起点" in clar
+    assert len(options) == 2
+
+
 # --------------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------------
@@ -428,7 +589,10 @@ CHECKS = [
     check_base_name, check_name_related, check_landmark_and_facility,
     check_pick_main_poi_branch, check_extract_hhmm, check_resolve_named_gate,
     check_fixed_events_scheduled, check_feasibility_conflict, check_time_hint_floor,
-    check_time_window_overrun, check_empty_and_noise_clarify, check_valid_trip_plans,
+    check_optional_between_meetings_does_not_break_fixed_event,
+    check_business_day_keeps_lunch_between_meetings_and_starts_at_hotel,
+    check_llm_path_is_augmented_with_return_endpoint_and_time, check_time_window_overrun,
+    check_empty_and_noise_clarify, check_valid_trip_plans,
     check_preset_chip_still_replays, check_free_text_not_hijacked_by_demo,
     check_plannable_helpers,
     # judge round 2
@@ -437,6 +601,8 @@ CHECKS = [
     check_merge_patch_protects_itinerary, check_merge_patch_rejects_full_rewrite,
     check_dedup_consecutive_pois, check_patch_merge_covers_fallback_path,
     check_alternatives_and_swap_recompute, check_dining_clarify_not_over_triggering,
+    check_ambiguous_home_end_clarifies, check_named_hotel_end_does_not_clarify,
+    check_school_endpoint_choice_clarify, check_school_start_choice_clarify,
 ]
 
 

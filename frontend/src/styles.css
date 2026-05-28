@@ -158,8 +158,9 @@ svg.map{width:100%;height:100%;display:block}
 .tl-title h3{font-size:15px;font-weight:650}
 .tl-title .reason{font-size:12.5px;color:var(--ink-3)}
 .timeline{display:flex;flex-direction:column;gap:11px}
-.stop{display:flex;gap:13px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);
+.stop{position:relative;display:flex;gap:13px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-sm);
   padding:13px 14px;box-shadow:var(--shadow-sm);opacity:0;animation:rise .5s ease forwards}
+.stop.menu-open{z-index:60}
 .stop .marker{flex-shrink:0;width:30px;height:30px;border-radius:9px;background:var(--accent-soft);color:var(--accent-d);
   display:grid;place-items:center;font-weight:700;font-size:14px;margin-top:1px}
 .stop.end .marker{background:#EEEBE5;color:var(--ink)}
@@ -178,10 +179,14 @@ svg.map{width:100%;height:100%;display:block}
 .star{color:var(--sun);font-weight:600}
 .tag{font-size:11px;padding:2px 8px;border-radius:6px;background:var(--sage-soft);color:var(--sage)}
 .link{color:var(--accent-d);cursor:pointer}
+.start-actions{display:inline-flex;align-items:center;gap:5px}
+.link-btn{font:inherit;background:none;border:none;padding:0}
+.link-btn:hover{text-decoration:underline}
+.sep{color:var(--ink-3)}
 /* per-stop "换一个" alternatives dropdown */
 .swap-wrap{position:relative;display:inline-flex}
 .swap-menu{position:absolute;top:calc(100% + 6px);right:0;min-width:230px;max-width:300px;max-height:280px;overflow-y:auto;
-  background:var(--surface);border:1px solid var(--line-2);border-radius:11px;box-shadow:var(--shadow);padding:5px;z-index:30}
+  background:var(--surface);border:1px solid var(--line-2);border-radius:11px;box-shadow:var(--shadow);padding:5px;z-index:70}
 .swap-item{display:block;width:100%;text-align:left;background:none;border:none;border-radius:8px;padding:7px 9px;cursor:pointer;font-family:inherit}
 .swap-item:hover{background:var(--inset)}
 .swap-name{display:block;font-size:12.5px;color:var(--ink);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}

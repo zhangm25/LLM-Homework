@@ -67,6 +67,7 @@ export default function App() {
   const [streamingId, setStreamingId] = useState<string | null>(null);
   const [activeScenario, setActiveScenario] = useState<string | null>(null);
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const [originSearchFocusSignal, setOriginSearchFocusSignal] = useState(0);
 
   const idCounter = useRef(0);
   const streamingIdRef = useRef<string | null>(null);
@@ -238,6 +239,14 @@ export default function App() {
     requestLocation(true);
   };
 
+  const onChangeOrigin = () => {
+    setOriginSearchFocusSignal((v) => v + 1);
+    setItems((prev) => [
+      ...prev,
+      { id: uid(), kind: "status", text: "请在顶部“搜起点”输入框里输入新的出发地点，然后从下拉候选中选择。" },
+    ]);
+  };
+
   // User picked an alternative for a stop — replace it and re-route (no LLM).
   const onSwap = async (stopIndex: number, choice: POIChoice) => {
     const cur = planRef.current;
@@ -276,6 +285,7 @@ export default function App() {
         onLocate={() => requestLocation(true)}
         city={city}
         onPickOrigin={pickOrigin}
+        focusSearchSignal={originSearchFocusSignal}
       />
 
       <div className="tabbar">
@@ -304,7 +314,13 @@ export default function App() {
           busy={busy}
           onSend={(t) => send(t)}
         />
-        <PlanPanel plan={plan} onRelocate={onRelocate} onSwap={onSwap} swappingIndex={swappingIndex} />
+        <PlanPanel
+          plan={plan}
+          onRelocate={onRelocate}
+          onChangeOrigin={onChangeOrigin}
+          onSwap={onSwap}
+          swappingIndex={swappingIndex}
+        />
       </div>
 
       <div className="footer">

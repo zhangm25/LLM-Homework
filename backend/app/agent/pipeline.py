@@ -42,7 +42,7 @@ from ..models.intent import (
 )
 from ..models.plan import ChatRequest, ClarifyOption, Plan, StreamEvent, Understanding
 from ..mock.demo_data import get_demo
-from ..planner.scheduler import build_plan, build_understanding
+from ..planner.scheduler import build_plan, build_understanding, _resolve_named
 from .heuristics import augment_intent, extract_intent_heuristic
 from .place_norm import normalize_place_name
 
@@ -322,6 +322,123 @@ def _has_preference_choice(message: str) -> bool:
     return any(m in message for m in markers)
 
 
+_GENERIC_RETURN_ENDPOINTS = {
+    "家", "家里", "住处", "住的地方", "宿舍", "酒店", "宾馆", "民宿", "公寓",
+    "公司", "单位", "办公室",
+}
+_GENERIC_RETURN_ONLY_RE = re.compile(
+    r"(回家|回去|回住处|回宿舍|回酒店|回宾馆|回民宿|回公寓|回公司|回单位|回办公室|"
+    r"回到家|回到住处|回到宿舍|回到酒店|回到宾馆|回到民宿|回到公寓|回到公司|回到单位|回到办公室|"
+    r"返回住处|返回酒店|返回宾馆|返回民宿|返回宿舍|返回公寓|返回公司|返回单位)"
+)
+_QUALIFIED_GENERIC_RETURN_RE = re.compile(
+    r"(?:回到|返回|回)\s*([一-龥A-Za-z0-9·]{1,18}?)的"
+    r"(家|住处|宿舍|酒店|宾馆|民宿|公寓|公司|单位|办公室)"
+)
+_BARE_RETURN_PLACE_RE = re.compile(r"(?:回到|返回|回)\s*([一-龥A-Za-z0-9·A-Za-z]{2,24}?)(?:，|,|。|；|;| |$)")
+_PRONOUN_RETURN_RE = re.compile(r"(?:回到|返回|回)\s*(这里|这儿|那里|那儿|原处)")
+_SPECIFIC_ENDPOINT_HINTS = (
+    "酒店", "宾馆", "民宿", "旅馆", "客栈", "小区", "公寓", "宿舍", "家属院", "社区",
+    "大厦", "大楼", "写字楼", "中心", "广场", "商场", "园区", "校区", "医院", "学校",
+    "大学", "中学", "小学", "公司", "门店", "餐厅", "饭店", "咖啡", "书店", "公园",
+    "地铁站", "火车站", "机场", "车站", "东门", "西门", "南门", "北门", "SOHO",
+)
+_SCHOOL_PLACE_TOKENS = ("大学", "学院", "学校", "中学", "小学")
+_SCHOOL_DETAIL_TOKENS = ("校区", "东门", "西门", "南门", "北门", "楼", "园区", "附中", "附小")
+
+
+def _ambiguous_return_phrase(message: str, intent: IntentObject) -> str | None:
+    text = message or ""
+    m = _QUALIFIED_GENERIC_RETURN_RE.search(text)
+    if m:
+        return f"{m.group(1)}的{m.group(2)}"
+    m = _GENERIC_RETURN_ONLY_RE.search(text) or _PRONOUN_RETURN_RE.search(text)
+    if m:
+        return m.group(1)
+    m = _BARE_RETURN_PLACE_RE.search(text)
+    if m:
+        place = normalize_place_name(m.group(1))
+        if place and not any(hint in place for hint in _SPECIFIC_ENDPOINT_HINTS):
+            return place
+    end = intent.constraints.end
+    value = normalize_place_name(end.value) if end and end.value else None
+    if value in _GENERIC_RETURN_ENDPOINTS:
+        return value
+    return None
+
+
+def _end_clarification_question(req: ChatRequest, intent: IntentObject) -> str | None:
+    phrase = _ambiguous_return_phrase(req.message, intent)
+    if not phrase:
+        return None
+    return (
+        f"你提到最后要回「{phrase}」，但这还不是一个可导航的具体终点。"
+        "请补充小区/大厦/酒店名/门牌或附近地标；例如直接说“终点是 XX 小区东门”或“家在 XX”。"
+    )
+
+
+def _has_clicked_place_choice(message: str, role: str) -> bool:
+    label = "起点" if role == "start" else "终点"
+    return "我选：" in (message or "") and f"{label}是" in message
+
+
+def _dedup_pois(pois) -> list:
+    seen: set[tuple[str, str, tuple[float, float]]] = set()
+    out = []
+    for p in pois:
+        key = (p.name, p.address, (round(p.location[0], 6), round(p.location[1], 6)))
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(p)
+    return out
+
+
+def _needs_school_choice(place: str) -> bool:
+    return (
+        bool(place)
+        and any(tok in place for tok in _SCHOOL_PLACE_TOKENS)
+        and not any(tok in place for tok in _SCHOOL_DETAIL_TOKENS)
+    )
+
+
+def _place_choice_options(req: ChatRequest, role: str, place: str, pois) -> list[ClarifyOption]:
+    base = req.message.strip()
+    label = "起点" if role == "start" else "终点"
+    options: list[ClarifyOption] = []
+    for i, p in enumerate(pois[:4], start=1):
+        address = p.address or "地址未标注"
+        options.append(ClarifyOption(
+            id=f"{role}-place-{i}",
+            label=p.name,
+            description=address,
+            message=f"{base}\n\n我选：{label}是 {p.name} {address}",
+        ))
+    return options
+
+
+async def _place_choice_clarify(req: ChatRequest, intent: IntentObject) -> tuple[str, list[ClarifyOption]] | None:
+    city = intent.constraints.city or req.city or get_settings().default_city
+    anchors: list[tuple[str, str]] = []
+    start = intent.constraints.start
+    if start.type == "named" and start.value and not _has_clicked_place_choice(req.message, "start"):
+        anchors.append(("start", start.value))
+    end = intent.constraints.end
+    if end and end.value and not _has_clicked_place_choice(req.message, "end"):
+        anchors.append(("end", end.value))
+
+    for role, place in anchors:
+        if not _needs_school_choice(place):
+            continue
+        pois = _dedup_pois(await _resolve_named(place, city))
+        if len(pois) < 2:
+            continue
+        label = "起点" if role == "start" else "终点"
+        question = f"「{place}」有多个校区/地址。请确认你说的{label}是哪一个？"
+        return question, _place_choice_options(req, role, place, pois)
+    return None
+
+
 def _dining_choice_options(req: ChatRequest, task: Task) -> list[ClarifyOption]:
     base = req.message.strip()
     city_hint = f"在{req.city}" if req.city else ""
@@ -445,6 +562,8 @@ async def _extract_intent(req: ChatRequest) -> IntentObject:
             intent = None  # degrade to the heuristic below rather than 500
     if intent is None:
         intent = augment_intent(extract_intent_heuristic(req.message, req.city), req.message)
+    else:
+        intent = augment_intent(intent, req.message)
     # Multi-turn safety net applied to BOTH paths: a patch must not silently
     # destroy the prior itinerary — especially when the LLM patch timed out and
     # we fell back to the (context-free) heuristic here.
@@ -529,6 +648,19 @@ async def plan_stream(req: ChatRequest) -> AsyncIterator[StreamEvent]:
         # --- 2. live chain ----------------------------------------------
         yield _ev(type="thinking", text="正在理解你的需求 🧭")
         intent = await _extract_intent(req)
+
+        end_question = _end_clarification_question(req, intent)
+        if end_question:
+            yield _ev(type="clarify", text=end_question, options=[], intent=intent)
+            yield _ev(type="done")
+            return
+
+        place_choice = await _place_choice_clarify(req, intent)
+        if place_choice:
+            question, options = place_choice
+            yield _ev(type="clarify", text=question, options=options, intent=intent)
+            yield _ev(type="done")
+            return
 
         # Non-trip / contradictory / empty-after-parse input: ask the right
         # question instead of fabricating a degenerate plan. The model often

@@ -7,18 +7,21 @@ export default function TopBar({
   onLocate,
   city,
   onPickOrigin,
+  focusSearchSignal,
 }: {
   locationLabel: string;
   locating: boolean;
   onLocate: () => void;
   city: string;
   onPickOrigin: (c: PlaceCandidate) => void;
+  focusSearchSignal?: number;
 }) {
   const [query, setQuery] = useState("");
   const [candidates, setCandidates] = useState<PlaceCandidate[]>([]);
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const boxRef = useRef<HTMLDivElement | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
 
   // Debounced search as you type (>= 2 chars). The user picks from the list,
   // so we never silently commit a single wrong geocode result.
@@ -49,6 +52,12 @@ export default function TopBar({
     return () => document.removeEventListener("mousedown", onDoc);
   }, []);
 
+  useEffect(() => {
+    if (!focusSearchSignal) return;
+    inputRef.current?.focus();
+    if (query.trim().length >= 2 || candidates.length > 0) setOpen(true);
+  }, [focusSearchSignal, query, candidates.length]);
+
   const pick = (c: PlaceCandidate) => {
     onPickOrigin(c);
     setQuery("");
@@ -69,6 +78,7 @@ export default function TopBar({
         </button>
         <div className="manual-loc" ref={boxRef}>
           <input
+            ref={inputRef}
             value={query}
             placeholder="搜起点，如 清华大学四教"
             onChange={(e) => setQuery(e.target.value)}

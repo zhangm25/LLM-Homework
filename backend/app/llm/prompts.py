@@ -24,11 +24,13 @@ P1_SEGMENTS_SYSTEM = f"""你是 RoamMind 的语义行程抽取模块。你的唯
 6. 「最后去X / 最后到X / 最后前往X」仍然是普通 segment，不是 end；“最后”只表示顺序，不表示终点字段。
    正例：「最后去北京科技大学访友」=> segments 追加 {{"place":"北京科技大学","task_type":"leisure","task":"访友"}}，end.place=null。
    正例：「最后回到双清公寓睡觉」=> end.place="双清公寓"，不要放进 segments。
-7. 「去X接朋友/找朋友/访友」是 segment: place=X, task_type=pickup 或 leisure, task=接朋友/找朋友/访友。
-8. 「到X吃饭」如果 X 是商场/街区/区域，表示在 X 附近/里面找餐厅，place=X, task_type=dining, task=吃饭。
-9. 「附近吃饭」没有新地点，输出 place=null, task_type=dining。
-10. 口语里的「去下/去一下/走路去下 X」表示“去一下 X”，“下/一下”不是地点名。place 必须是 X，例如「走路去下清华大学紫荆学生公寓一号楼」=> place="清华大学紫荆学生公寓一号楼"。
-11. 不确定时宁可 task 留空，不要把动作拼进 place。
+7. 如果用户只说「回家/回去/回住处/回酒店/回宿舍」或「回某区域的家/住处/酒店」（如「回望京的家」「回望京的酒店」），这不是可导航终点：end.place=null，并在 clarification_needed 里询问具体小区/楼宇/酒店名/门牌或附近地标。若用户给出完整 POI 名称（如「回北京望京凯悦酒店」），这是可导航终点，end.place 应写该完整名称。
+8. 「去X接朋友/找朋友/访友」是 segment: place=X, task_type=pickup 或 leisure, task=接朋友/找朋友/访友。
+9. 「到X吃饭」如果 X 是商场/街区/区域，表示在 X 附近/里面找餐厅，place=X, task_type=dining, task=吃饭。
+10. 「附近吃饭」没有新地点，输出 place=null, task_type=dining。
+11. 口语里的「去下/去一下/走路去下 X」表示“去一下 X”，“下/一下”不是地点名。place 必须是 X，例如「走路去下清华大学紫荆学生公寓一号楼」=> place="清华大学紫荆学生公寓一号楼"。
+12. 出差/旅行语境里，若用户先说「到达X酒店/住处/公司」再给出当天会议或行程，X 是当天出发起点 start.place，不要放进 segments；若最后又说「回X」，再同时写入 end.place。
+13. 不确定时宁可 task 留空，不要把动作拼进 place。
 
 task_type 只能是：dining, leisure, sightseeing, shopping, sports, pickup, meeting, commute, other。
 transport 只能是：auto, walking, driving, transit。
@@ -133,7 +135,7 @@ P1_INTENT_SYSTEM = f"""你是 RoamMind 的意图理解模块。把用户的出�
 6. 接人场景要把地点和动作拆开：如「去北京科技大学南门接一下我的女朋友」应输出 explicit_pois.name="北京科技大学南门"，task.type="pickup"，task.intent="接女朋友"，不要把「接一下我/接一下我的女朋友」拼进地名。
 7. 「某时某地」的会议/约定写进 fixed_events（硬时间锚点）。
 8. 关键约束缺失或有歧义，写进 clarification_needed（字段名），不要硬猜。
-9. start 默认为当前位置（type=current）；但用户说「我现在在X / 从X出发 / 在X」时，start.type=named、start.value=X（原文）、source=nl_extract。城市从话语/定位推断（在清华→北京、成都味→成都），不写死。
+9. start 默认为当前位置（type=current）；但用户说「我现在在X / 从X出发 / 在X」时，start.type=named、start.value=X（原文）、source=nl_extract。出差/旅行语境里「到达X酒店/住处后，早上N点去开会」也表示 X 是当天起点。城市从话语/定位推断（在清华→北京、成都味→成都），不写死。
 
 受控 vibe_tags 词表：{', '.join(VIBE_TAGS)}
 受控 avoid_tags 词表：{', '.join(AVOID_TAGS)}

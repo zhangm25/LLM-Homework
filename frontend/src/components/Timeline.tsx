@@ -4,11 +4,13 @@ import type { Plan, POIChoice, Stop } from "../types";
 function StopRow({
   stop,
   onRelocate,
+  onChangeOrigin,
   onSwap,
   swapping,
 }: {
   stop: Stop;
   onRelocate?: () => void;
+  onChangeOrigin?: () => void;
   onSwap?: (choice: POIChoice) => void;
   swapping?: boolean;
 }) {
@@ -28,7 +30,7 @@ function StopRow({
   }, [open]);
 
   return (
-    <div className={`stop ${stop.kind}`}>
+    <div className={`stop ${stop.kind}${open ? " menu-open" : ""}`}>
       <div className="marker">{stop.marker}</div>
       <div className="body">
         <div className="l1">
@@ -45,8 +47,14 @@ function StopRow({
             {stop.rating != null && <span className="star">★ {stop.rating}</span>}
             {stop.cost && <span>{stop.cost}</span>}
             {isStart && (
-              <span className="link" onClick={onRelocate}>
-                重新定位 / 改地点
+              <span className="start-actions">
+                <button className="link link-btn" type="button" onClick={onRelocate}>
+                  重新定位
+                </button>
+                <span className="sep">/</span>
+                <button className="link link-btn" type="button" onClick={onChangeOrigin}>
+                  改地点
+                </button>
               </span>
             )}
             {isEnd && <span>终点</span>}
@@ -97,11 +105,13 @@ function StopRow({
 export default function Timeline({
   plan,
   onRelocate,
+  onChangeOrigin,
   onSwap,
   swappingIndex,
 }: {
   plan: Plan;
   onRelocate?: () => void;
+  onChangeOrigin?: () => void;
   onSwap?: (stopIndex: number, choice: POIChoice) => void;
   swappingIndex?: number | null;
 }) {
@@ -122,6 +132,7 @@ export default function Timeline({
             stop={stop}
             key={`${i}-${stop.name}`}
             onRelocate={stop.kind === "start" ? onRelocate : undefined}
+            onChangeOrigin={stop.kind === "start" ? onChangeOrigin : undefined}
             onSwap={onSwap ? (c) => onSwap(i, c) : undefined}
             swapping={swappingIndex === i}
           />

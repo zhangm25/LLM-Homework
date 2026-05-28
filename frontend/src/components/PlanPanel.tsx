@@ -6,11 +6,13 @@ import NavButton from "./NavButton";
 export default function PlanPanel({
   plan,
   onRelocate,
+  onChangeOrigin,
   onSwap,
   swappingIndex,
 }: {
   plan: Plan | null;
   onRelocate?: () => void;
+  onChangeOrigin?: () => void;
   onSwap?: (stopIndex: number, choice: POIChoice) => void;
   swappingIndex?: number | null;
 }) {
@@ -45,7 +47,13 @@ export default function PlanPanel({
               routeSegments={plan.summary.segments}
             />
           </div>
-          <Timeline plan={plan} onRelocate={onRelocate} onSwap={onSwap} swappingIndex={swappingIndex} />
+          <Timeline
+            plan={plan}
+            onRelocate={onRelocate}
+            onChangeOrigin={onChangeOrigin}
+            onSwap={onSwap}
+            swappingIndex={swappingIndex}
+          />
           <NavButton plan={plan} />
         </>
       ) : (
