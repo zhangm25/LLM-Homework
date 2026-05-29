@@ -8,6 +8,7 @@ import type {
   ChatItem,
   ChatMessage,
   ChatRequestBody,
+  PlaceCandidate as ResolvedPlaceCandidate,
   Plan,
   POIChoice,
   StreamEvent,
@@ -286,6 +287,46 @@ export default function App() {
     setSwappingIndex(null);
   };
 
+  const onPickPlaceCandidate = async (slotId: string, candidate: ResolvedPlaceCandidate) => {
+    const cur = planRef.current;
+    if (!cur || busy || swappingIndex !== null) return;
+    const slot = cur.place_resolution?.slots.find((s) => s.id === slotId);
+    if (!slot) return;
+    const stopIndex = findStopIndexForSlot(cur, slotId);
+    if (stopIndex < 0) return;
+    setSwappingIndex(stopIndex);
+    const timeline = cur.timeline.map((s, i) =>
+      i === stopIndex
+        ? {
+            ...s,
+            name: slot.role === "end" ? `回 ${candidate.name}` : candidate.name,
+            location: candidate.location,
+            rating: candidate.rating,
+            cost: candidate.cost,
+            open_info: slot.role === "start" ? `📍 ${candidate.name}` : null,
+          }
+        : s,
+    );
+    const updated = await recomputeRoute(timeline, cur.city, cur.intent ?? null);
+    const placeResolution = updateSelectedPlace(cur, slotId, candidate);
+    if (updated) {
+      const merged: Plan = {
+        ...updated,
+        understanding: cur.understanding ?? updated.understanding,
+        intent: updated.intent ?? cur.intent,
+        place_resolution: placeResolution,
+      };
+      planRef.current = merged;
+      intentRef.current = merged.intent ?? intentRef.current;
+      setPlan(merged);
+    } else {
+      const merged: Plan = { ...cur, timeline, place_resolution: placeResolution };
+      planRef.current = merged;
+      setPlan(merged);
+    }
+    setSwappingIndex(null);
+  };
+
   const reset = () => {
     if (busy) return;
     setItems([]);
@@ -338,6 +379,7 @@ export default function App() {
           onRelocate={onRelocate}
           onChangeOrigin={onChangeOrigin}
           onSwap={onSwap}
+          onPickPlaceCandidate={onPickPlaceCandidate}
           swappingIndex={swappingIndex}
         />
       </div>
@@ -353,4 +395,52 @@ export default function App() {
       </div>
     </>
   );
+}
+
+function sameLocation(a?: [number, number] | null, b?: [number, number] | null) {
+  if (!a || !b) return false;
+  return Math.abs(a[0] - b[0]) < 0.000001 && Math.abs(a[1] - b[1]) < 0.000001;
+}
+
+function stripReturnPrefix(name: string) {
+  return name.replace(/^回\s*/, "");
+}
+
+function findStopIndexForSlot(plan: Plan, slotId: string) {
+  const slot = plan.place_resolution?.slots.find((s) => s.id === slotId);
+  if (!slot) return -1;
+  if (slot.role === "start") return plan.timeline.findIndex((s) => s.kind === "start");
+  if (slot.role === "end") return plan.timeline.findIndex((s) => s.kind === "end");
+  if (slot.role === "fixed") {
+    const selectedName = slot.selected?.name;
+    return plan.timeline.findIndex(
+      (s) =>
+        s.kind === "fixed" &&
+        (sameLocation(s.location, slot.selected?.location) || (selectedName ? s.name.includes(selectedName) : false)),
+    );
+  }
+  const selected = slot.selected;
+  return plan.timeline.findIndex(
+    (s) =>
+      s.kind === "poi" &&
+      (sameLocation(s.location, selected?.location) ||
+        (!!selected?.name && stripReturnPrefix(s.name) === selected.name) ||
+        (!!selected?.name && s.name.includes(selected.name))),
+  );
+}
+
+function updateSelectedPlace(plan: Plan, slotId: string, candidate: ResolvedPlaceCandidate) {
+  if (!plan.place_resolution) return plan.place_resolution ?? null;
+  return {
+    ...plan.place_resolution,
+    slots: plan.place_resolution.slots.map((slot) =>
+      slot.id === slotId
+        ? {
+            ...slot,
+            selected: candidate,
+            status: "selected" as const,
+          }
+        : slot,
+    ),
+  };
 }

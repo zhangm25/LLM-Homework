@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import AMapLoader from "@amap/amap-jsapi-loader";
-import type { RouteSegment, Stop } from "../types";
+import type { PlaceCandidate, RouteSegment, Stop } from "../types";
 
 const JS_KEY = import.meta.env.VITE_AMAP_JS_KEY;
 const SECURITY_CODE = import.meta.env.VITE_AMAP_JS_SECURITY_CODE;
@@ -12,6 +12,13 @@ const ROUTE_COLOR = "#C96442";
 const SEGMENT_COLORS = ["#C96442", "#4F7163", "#C98A33", "#6F5D91", "#4E7E9E"];
 
 type LngLat = [number, number];
+
+interface CandidateFocus {
+  slotId: string;
+  candidates: PlaceCandidate[];
+  selectedId?: string | null;
+  onPick?: (candidate: PlaceCandidate) => void;
+}
 
 function pinLabel(stop: Stop, index: number, total: number): string {
   if (stop.kind === "start") return "起";
@@ -30,6 +37,12 @@ function pinHtml(stop: Stop, index: number, total: number): string {
     index,
     total,
   )}</div>`;
+}
+
+function candidateHtml(selected: boolean): string {
+  return `<div style="min-width:28px;height:28px;border-radius:14px;background:${
+    selected ? "#211F1B" : ROUTE_COLOR
+  };color:#fff;display:grid;place-items:center;padding:0 8px;font-size:12px;font-weight:700;box-shadow:0 2px 8px rgba(0,0,0,.28);border:2px solid #fff">${selected ? "选" : "候"}</div>`;
 }
 
 // Project [lng,lat] coords into the SVG viewBox over a shared bounding box.
@@ -163,14 +176,51 @@ function SvgSegmentMap({
   );
 }
 
+function SvgCandidateMap({ focus }: { focus: CandidateFocus }) {
+  const candidates = focus.candidates.filter((c) => c.location?.length === 2);
+  if (!candidates.length) return <SvgMap stops={[]} routePolyline={[]} />;
+  const project = makeProjector(candidates.map((c) => c.location));
+  return (
+    <svg className="map" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="xMidYMid meet">
+      <rect x="60" y="40" width="120" height="64" rx="16" fill="#E5EDE4" />
+      <rect x="430" y="170" width="150" height="90" rx="18" fill="#E5EDE4" />
+      <path
+        d="M380,28 C430,66 470,76 540,58 C590,44 610,66 630,58"
+        stroke="#D4E2E9" strokeWidth="13" fill="none" strokeLinecap="round"
+      />
+      {candidates.map((candidate, i) => {
+        const p = project(candidate.location[0], candidate.location[1]);
+        const selected = candidate.id === focus.selectedId;
+        return (
+          <g
+            className={`candidate-pin${selected ? " selected" : ""}`}
+            key={`${candidate.id}-${i}`}
+            transform={`translate(${p.x.toFixed(0)},${p.y.toFixed(0)})`}
+            onClick={() => focus.onPick?.(candidate)}
+            role="button"
+            tabIndex={0}
+            aria-label={`选择 ${candidate.name}`}
+          >
+            <circle className="ring" r="17" />
+            <circle className="bg" r="13" />
+            <text dy="4.5">{selected ? "选" : String(i + 1)}</text>
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 export default function MapView({
   stops,
   routePolyline = [],
   routeSegments = [],
+  candidateFocus = null,
 }: {
   stops: Stop[];
   routePolyline?: LngLat[];
   routeSegments?: RouteSegment[];
+  candidateFocus?: CandidateFocus | null;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [failed, setFailed] = useState(false);
@@ -186,6 +236,20 @@ export default function MapView({
       .then((AMap: any) => {
         if (cancelled || !ref.current) return;
         map = new AMap.Map(ref.current, { zoom: 12, viewMode: "2D", mapStyle: "amap://styles/whitesmoke" });
+        const focusedCandidates = candidateFocus?.candidates.filter((c) => c.location?.length === 2) ?? [];
+        if (focusedCandidates.length) {
+          focusedCandidates.forEach((candidate) => {
+            const marker = new AMap.Marker({
+              position: candidate.location,
+              anchor: "center",
+              content: candidateHtml(candidate.id === candidateFocus?.selectedId),
+            });
+            marker.on("click", () => candidateFocus?.onPick?.(candidate));
+            map.add(marker);
+          });
+          map.setFitView(null, false, [48, 48, 48, 48]);
+          return;
+        }
         const located = stops.filter((s) => s.location);
         // real road geometry if the backend supplied it, else connect the stops
         const useSegments = routeSegments.filter((seg) => seg.polyline.length >= 2);
@@ -230,12 +294,14 @@ export default function MapView({
       cancelled = true;
       if (map) map.destroy();
     };
-  }, [stops, routePolyline, routeSegments, useReal]);
+  }, [stops, routePolyline, routeSegments, useReal, candidateFocus]);
 
   return (
     <div className="mapwrap">
       {useReal ? (
         <div className="map-real" ref={ref} />
+      ) : candidateFocus?.candidates.length ? (
+        <SvgCandidateMap focus={candidateFocus} />
       ) : routeSegments.length > 0 ? (
         <SvgSegmentMap stops={stops} routeSegments={routeSegments} />
       ) : (
@@ -243,7 +309,9 @@ export default function MapView({
       )}
       <div className="badge-disc">
         {useReal
-          ? "高德实时地图 · 分段路线"
+          ? candidateFocus?.candidates.length ? "高德实时地图 · 候选地点" : "高德实时地图 · 分段路线"
+          : candidateFocus?.candidates.length
+            ? "候选地点 · 点击更换"
           : routePolyline.length >= 2
             ? "真实路线（后端高德）· 分段配色"
             : "示例数据 · 实际地点由高德实时检索填充"}

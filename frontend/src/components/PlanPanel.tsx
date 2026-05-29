@@ -1,4 +1,5 @@
-import type { PlaceResolution, Plan, POIChoice } from "../types";
+import { useMemo, useState } from "react";
+import type { PlaceCandidate, PlaceResolution, PlaceSlot, Plan, POIChoice } from "../types";
 import MapView from "./MapView";
 import Timeline from "./Timeline";
 import NavButton from "./NavButton";
@@ -9,14 +10,32 @@ export default function PlanPanel({
   onRelocate,
   onChangeOrigin,
   onSwap,
+  onPickPlaceCandidate,
   swappingIndex,
 }: {
   plan: Plan | null;
   onRelocate?: () => void;
   onChangeOrigin?: () => void;
   onSwap?: (stopIndex: number, choice: POIChoice) => void;
+  onPickPlaceCandidate?: (slotId: string, candidate: PlaceCandidate) => void;
   swappingIndex?: number | null;
 }) {
+  const slots = plan?.place_resolution?.slots?.filter((slot) => slot.selected || slot.candidates.length) ?? [];
+  const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
+  const activeSlot = useMemo(
+    () => slots.find((slot) => slot.id === activeSlotId) ?? slots[0] ?? null,
+    [activeSlotId, slots],
+  );
+  const candidateFocus =
+    activeSlot && activeSlot.candidates.length
+      ? {
+          slotId: activeSlot.id,
+          candidates: activeSlot.candidates,
+          selectedId: activeSlot.selected?.id ?? null,
+          onPick: (candidate: PlaceCandidate) => onPickPlaceCandidate?.(activeSlot.id, candidate),
+        }
+      : null;
+
   return (
     <div className="plan">
       <div className="panel-title">
@@ -46,9 +65,15 @@ export default function PlanPanel({
               stops={plan.timeline}
               routePolyline={plan.summary.polyline}
               routeSegments={plan.summary.segments}
+              candidateFocus={candidateFocus}
             />
           </div>
-          <PlaceResolutionSummary resolution={plan.place_resolution ?? null} />
+          <PlaceResolutionSummary
+            resolution={plan.place_resolution ?? null}
+            activeSlotId={activeSlot?.id ?? null}
+            onSelectSlot={setActiveSlotId}
+            onPickCandidate={onPickPlaceCandidate}
+          />
           <Timeline
             plan={plan}
             onRelocate={onRelocate}
@@ -77,7 +102,17 @@ export default function PlanPanel({
   );
 }
 
-function PlaceResolutionSummary({ resolution }: { resolution: PlaceResolution | null }) {
+function PlaceResolutionSummary({
+  resolution,
+  activeSlotId,
+  onSelectSlot,
+  onPickCandidate,
+}: {
+  resolution: PlaceResolution | null;
+  activeSlotId: string | null;
+  onSelectSlot: (slotId: string) => void;
+  onPickCandidate?: (slotId: string, candidate: PlaceCandidate) => void;
+}) {
   const slots = resolution?.slots?.filter((slot) => slot.selected || slot.candidates.length) ?? [];
   if (!slots.length) return null;
   return (
@@ -88,16 +123,51 @@ function PlaceResolutionSummary({ resolution }: { resolution: PlaceResolution | 
       </div>
       <div className="place-slots">
         {slots.map((slot) => (
-          <div className="place-slot" key={slot.id}>
-            <span className="place-role">{roleLabel(slot.role)}</span>
-            <span className="place-main" title={slot.selected?.address || slot.selected?.name || slot.query}>
-              {slot.selected?.name || slot.query}
-            </span>
-            {slot.candidates.length > 1 ? <span className="place-count">{slot.candidates.length} 个候选</span> : null}
-            {slot.selected?.address ? <span className="place-address">{slot.selected.address}</span> : null}
+          <div className={`place-slot${slot.id === activeSlotId ? " active" : ""}`} key={slot.id}>
+            <button className="place-slot-main" type="button" onClick={() => onSelectSlot(slot.id)}>
+              <span className="place-role">{roleLabel(slot.role)}</span>
+              <span className="place-main" title={slot.selected?.address || slot.selected?.name || slot.query}>
+                {slot.selected?.name || slot.query}
+              </span>
+              {slot.candidates.length > 1 ? <span className="place-count">{slot.candidates.length} 个候选</span> : null}
+              {slot.selected?.address ? <span className="place-address">{slot.selected.address}</span> : null}
+            </button>
+            {slot.id === activeSlotId && slot.candidates.length > 1 ? (
+              <CandidateList slot={slot} onPickCandidate={onPickCandidate} />
+            ) : null}
           </div>
         ))}
       </div>
+    </div>
+  );
+}
+
+function CandidateList({
+  slot,
+  onPickCandidate,
+}: {
+  slot: PlaceSlot;
+  onPickCandidate?: (slotId: string, candidate: PlaceCandidate) => void;
+}) {
+  return (
+    <div className="place-candidates">
+      {slot.candidates.map((candidate) => {
+        const selected = candidate.id === slot.selected?.id;
+        return (
+          <button
+            className={`place-candidate${selected ? " selected" : ""}`}
+            type="button"
+            key={candidate.id}
+            onClick={() => onPickCandidate?.(slot.id, candidate)}
+          >
+            <span>{candidate.name}</span>
+            <small>
+              {candidate.rating != null ? `★ ${candidate.rating}` : "候选地点"}
+              {candidate.address ? ` · ${candidate.address}` : ""}
+            </small>
+          </button>
+        );
+      })}
     </div>
   );
 }
