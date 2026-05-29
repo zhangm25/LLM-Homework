@@ -200,6 +200,11 @@ svg.map{width:100%;height:100%;display:block}
   border-radius:14px;display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:0 8px 22px rgba(201,100,66,.32);transition:transform .12s}
 .navbtn:hover{transform:translateY(-1px)} .navbtn small{font-weight:400;opacity:.85;font-size:12px}
 .navbtn:disabled{opacity:.5;cursor:not-allowed;transform:none}
+.export-btn{margin-top:18px;width:100%;font-family:inherit;cursor:pointer;background:var(--surface);color:var(--sage);
+  border:1px solid var(--sage-bd);border-radius:14px;padding:13px 14px;font-size:14px;font-weight:650;
+  display:flex;align-items:center;justify-content:center;gap:10px;box-shadow:var(--shadow-sm);transition:all .15s}
+.export-btn:hover{background:var(--sage-soft);border-color:#C6D9CF;transform:translateY(-1px)}
+.export-btn small{font-size:11.5px;font-weight:450;color:var(--ink-2)}
 .subnote{text-align:center;font-size:11.5px;color:var(--ink-3);margin-top:9px}
 .subnote.warn{color:var(--accent-d)}
 .segment-nav{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px;margin-top:10px}
