@@ -1,4 +1,4 @@
-import type { Plan, POIChoice } from "../types";
+import type { PlaceResolution, Plan, POIChoice } from "../types";
 import MapView from "./MapView";
 import Timeline from "./Timeline";
 import NavButton from "./NavButton";
@@ -48,6 +48,7 @@ export default function PlanPanel({
               routeSegments={plan.summary.segments}
             />
           </div>
+          <PlaceResolutionSummary resolution={plan.place_resolution ?? null} />
           <Timeline
             plan={plan}
             onRelocate={onRelocate}
@@ -74,4 +75,46 @@ export default function PlanPanel({
       )}
     </div>
   );
+}
+
+function PlaceResolutionSummary({ resolution }: { resolution: PlaceResolution | null }) {
+  const slots = resolution?.slots?.filter((slot) => slot.selected || slot.candidates.length) ?? [];
+  if (!slots.length) return null;
+  return (
+    <div className="place-summary" aria-label="已确定地点">
+      <div className="place-summary-head">
+        <span>地点确认</span>
+        <small>{resolution?.status === "places_ready" ? "已就绪" : "部分待确认"}</small>
+      </div>
+      <div className="place-slots">
+        {slots.map((slot) => (
+          <div className="place-slot" key={slot.id}>
+            <span className="place-role">{roleLabel(slot.role)}</span>
+            <span className="place-main" title={slot.selected?.address || slot.selected?.name || slot.query}>
+              {slot.selected?.name || slot.query}
+            </span>
+            {slot.candidates.length > 1 ? <span className="place-count">{slot.candidates.length} 个候选</span> : null}
+            {slot.selected?.address ? <span className="place-address">{slot.selected.address}</span> : null}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function roleLabel(role: string) {
+  switch (role) {
+    case "start":
+      return "起点";
+    case "end":
+      return "终点";
+    case "fixed":
+      return "固定";
+    case "waypoint":
+      return "途经";
+    case "activity_poi":
+      return "活动";
+    default:
+      return "地点";
+  }
 }

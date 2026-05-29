@@ -158,6 +158,18 @@ svg.map{width:100%;height:100%;display:block}
 .pin.ends circle.bg{fill:var(--ink)}
 .badge-disc{position:absolute;left:14px;bottom:12px;font-size:11.5px;color:var(--ink-3);background:rgba(255,255,255,.82);
   border:1px solid var(--line);border-radius:999px;padding:4px 11px}
+.place-summary{margin-top:12px;border:1px solid var(--line);background:var(--surface);border-radius:var(--r-sm);
+  box-shadow:var(--shadow-sm);padding:12px 13px}
+.place-summary-head{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px}
+.place-summary-head span{font-size:13.5px;font-weight:650;color:var(--ink)}
+.place-summary-head small{font-size:11.5px;color:var(--sage);background:var(--sage-soft);border:1px solid var(--sage-bd);
+  border-radius:999px;padding:2px 8px;white-space:nowrap}
+.place-slots{display:flex;flex-direction:column;gap:7px}
+.place-slot{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:7px 9px;align-items:center;font-size:12.5px}
+.place-role{color:var(--accent-d);background:var(--accent-soft);border-radius:6px;padding:2px 7px;font-weight:650;white-space:nowrap}
+.place-main{color:var(--ink);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.place-count{color:var(--ink-3);white-space:nowrap}
+.place-address{grid-column:2 / 4;color:var(--ink-3);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .tl-title{display:flex;align-items:center;justify-content:space-between;margin:20px 2px 12px}
 .tl-title h3{font-size:15px;font-weight:650}
 .tl-title .reason{font-size:12.5px;color:var(--ink-3)}
