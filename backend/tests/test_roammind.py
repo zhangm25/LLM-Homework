@@ -18,6 +18,7 @@ from pathlib import Path
 os.environ["LLM_API_KEY"] = ""
 os.environ["DEEPSEEK_API_KEY"] = ""
 os.environ["AMAP_WEB_SERVICE_KEY"] = ""
+os.environ["LLM_DEBUG_LOG"] = "0"
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # .../backend
 
 import app.planner.scheduler as sch  # noqa: E402
@@ -30,10 +31,10 @@ from app.tools.amap_client import POI, Leg  # noqa: E402
 from app.models.intent import (  # noqa: E402
     IntentObject, Constraints, Endpoint, Task, FixedEvent, TimeWindow, ExplicitPOI,
 )
-from app.models.plan import ChatRequest  # noqa: E402
+from app.models.plan import ChatRequest, GeoPoint  # noqa: E402
 from app.agent.pipeline import (  # noqa: E402
     plan_stream, _is_plannable, _not_plannable_question, _merge_patch, _anchor_count,
-    _extract_intent,
+    _extract_intent, _complete_pending_intent_llm, _apply_origin_to_start,
 )
 
 
@@ -246,7 +247,7 @@ async def check_llm_path_is_augmented_with_return_endpoint_and_time():
     class FakeLLM:
         enabled = True
 
-        async def complete_json(self, system, user, temp):
+        async def complete_json(self, system, user, temp, stage="json"):
             return {
                 "city": "上海",
                 "start": {"place": None, "transport_hint": None},
@@ -322,6 +323,18 @@ async def _stream_clarify(msg, scripted=None):
             clar = ev.text
             options = ev.options
     return types, clar, options
+
+
+async def _stream_clarify_req(req: ChatRequest, scripted=None):
+    use_fake(scripted)
+    types, clar, options, intent = [], None, [], None
+    async for ev in plan_stream(req):
+        types.append(ev.type)
+        if ev.type == "clarify":
+            clar = ev.text
+            options = ev.options
+            intent = ev.intent
+    return types, clar, options, intent
 
 
 async def check_empty_and_noise_clarify():
@@ -524,9 +537,10 @@ async def check_dining_clarify_not_over_triggering():
     # Rich, clear itinerary with a dining task -> plan, don't interrogate.
     types, _ = await _stream_types("先去三里屯逛逛，再去南锣鼓巷吃饭，最后去后海散步")
     assert "plan" in types, types
-    # Light, dining-led ask -> the clarify is still worth it.
+    # Light, dining-led asks are now advisory validation issues: don't block
+    # the user; let the planner pick a sensible default.
     types2, _ = await _stream_types("随便找个地方吃饭")
-    assert "clarify" in types2, types2
+    assert "plan" in types2 and "clarify" not in types2, types2
 
 
 async def check_ambiguous_home_end_clarifies():
@@ -544,6 +558,111 @@ async def check_ambiguous_home_end_clarifies():
     types2, clar2 = await _stream_types("下午逛逛公园，晚上回去")
     assert "clarify" in types2 and "plan" not in types2, types2
     assert clar2 and "回去" in clar2 and "具体终点" in clar2
+
+
+async def check_ambiguous_end_offers_origin_guess():
+    req = ChatRequest(
+        message="下午先去南锣鼓巷逛逛，晚上回去",
+        city="北京",
+        origin=GeoPoint(lng=116.40, lat=39.90, label="当前位置A"),
+        origin_status="available",
+    )
+    types, clar, options, _ = await _stream_clarify_req(req)
+    assert "clarify" in types and "plan" not in types, types
+    assert clar and "下面的猜测" in clar
+    assert options and options[0].label == "回到当前位置"
+    assert "终点是 当前位置A" in options[0].message
+
+
+async def check_current_start_unknown_clarifies():
+    req = ChatRequest(
+        message="从这里出发，去三里屯逛逛",
+        city="北京",
+        origin=None,
+        origin_status="denied",
+    )
+    types, clar, options, _ = await _stream_clarify_req(req)
+    assert "clarify" in types and "plan" not in types, types
+    assert clar and "拿不到你的当前位置" in clar
+    assert options and options[0].label == "从 三里屯"
+
+
+async def check_clarify_answer_completes_prior_intent():
+    first = ChatRequest(
+        message="下午先去南锣鼓巷逛逛，晚上回去",
+        city="北京",
+        origin=GeoPoint(lng=116.40, lat=39.90, label="当前位置A"),
+        origin_status="available",
+    )
+    types, _, options, pending = await _stream_clarify_req(first)
+    assert "clarify" in types and pending and pending.is_available is False
+
+    use_fake()
+    planned = False
+    answer = ChatRequest(
+        message=options[0].message,
+        city="北京",
+        origin=GeoPoint(lng=116.40, lat=39.90, label="当前位置A"),
+        origin_status="available",
+        intent=pending,
+    )
+    async for ev in plan_stream(answer):
+        if ev.type == "plan":
+            planned = True
+            assert ev.plan.intent and ev.plan.intent.is_available is True
+    assert planned
+
+
+async def check_p1_clarify_accepts_internal_intent_schema():
+    prior = IntentObject(
+        is_available=False,
+        pending_question_type="end",
+        pending_field="constraints.end",
+        constraints=Constraints(city="北京", start=Endpoint(type="current")),
+        explicit_pois=[ExplicitPOI(name="南锣鼓巷", fixed_order_index=0)],
+        tasks=[Task(id="t1", type="sightseeing", intent="逛逛", at="南锣鼓巷", explicit=True)],
+        clarification_needed=["请确认终点"],
+    )
+
+    class FakeLLM:
+        async def complete_json(self, system, user, temp, stage="json"):
+            data = prior.model_dump()
+            data["is_available"] = True
+            data["pending_question_type"] = None
+            data["pending_field"] = None
+            data["constraints"]["end"] = {"type": "named", "value": "当前位置A", "source": "nl_extract", "location": None}
+            data["clarification_needed"] = []
+            return data
+
+    req = ChatRequest(message="回到当前位置A", city="北京", intent=prior)
+    intent = await _complete_pending_intent_llm(req, prior, FakeLLM())
+    assert intent.is_available is True
+    assert intent.constraints.end and intent.constraints.end.value == "当前位置A"
+    assert intent.explicit_pois and intent.explicit_pois[0].name == "南锣鼓巷"
+    assert intent.tasks and intent.tasks[0].at == "南锣鼓巷"
+
+
+def check_origin_label_preserves_full_start_address():
+    req = ChatRequest(
+        message="从当前位置出发，去五道口",
+        city="北京",
+        origin=GeoPoint(
+            lng=116.326,
+            lat=40.006,
+            label="北京市海淀区清华园清华大学清华大学附属中学",
+        ),
+        origin_status="available",
+    )
+    intent = IntentObject(
+        constraints=Constraints(
+            city="北京",
+            start=Endpoint(type="named", value="清华大学附属中学", source="nl_extract"),
+        )
+    )
+    updated = _apply_origin_to_start(req, intent)
+    assert updated.constraints.start.value == "北京市海淀区清华园清华大学清华大学附属中学"
+    assert updated.constraints.start.source == "geolocation"
+    assert updated.constraints.start.location == [116.326, 40.006]
 
 
 async def check_named_hotel_end_does_not_clarify():
@@ -583,6 +702,30 @@ async def check_school_start_choice_clarify():
     assert len(options) == 2
 
 
+async def check_geolocated_school_start_does_not_clarify():
+    scripted = {
+        "北京市海淀区清华园清华大学清华大学附属中学": [
+            _poi("清华大学附属中学", [116.326, 40.006], "科教文化服务;学校;中学", address="北京市海淀区清华园"),
+            _poi("清华大学附属中学将台路校区", [116.490, 39.970], "科教文化服务;学校;中学", address="北京市朝阳区将台路"),
+        ]
+    }
+    req = ChatRequest(
+        message="从当前位置出发，去三里屯逛逛",
+        city="北京",
+        origin=GeoPoint(
+            lng=116.326,
+            lat=40.006,
+            label="北京市海淀区清华园清华大学清华大学附属中学",
+        ),
+        origin_status="available",
+    )
+    use_fake(scripted)
+    types = []
+    async for ev in plan_stream(req):
+        types.append(ev.type)
+    assert "plan" in types and "clarify" not in types, types
+
+
 # --------------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------------
@@ -603,7 +746,11 @@ CHECKS = [
     check_dedup_consecutive_pois, check_patch_merge_covers_fallback_path,
     check_alternatives_and_swap_recompute, check_dining_clarify_not_over_triggering,
     check_ambiguous_home_end_clarifies, check_named_hotel_end_does_not_clarify,
+    check_ambiguous_end_offers_origin_guess, check_current_start_unknown_clarifies,
+    check_clarify_answer_completes_prior_intent, check_p1_clarify_accepts_internal_intent_schema,
+    check_origin_label_preserves_full_start_address,
     check_school_endpoint_choice_clarify, check_school_start_choice_clarify,
+    check_geolocated_school_start_does_not_clarify,
 ]
 
 

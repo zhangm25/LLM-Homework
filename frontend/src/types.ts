@@ -94,7 +94,7 @@ export interface ClarifyOption {
 export type StreamEvent =
   | { type: "thinking"; text: string }
   | { type: "understanding"; understanding: Understanding }
-  | { type: "clarify"; text: string; options: ClarifyOption[] }
+  | { type: "clarify"; text: string; options: ClarifyOption[]; intent?: unknown | null }
   | { type: "message"; text: string }
   | { type: "plan"; plan: Plan }
   | { type: "done" }
@@ -110,6 +110,7 @@ export interface ChatRequestBody {
   history: ChatMessage[];
   city?: string | null;
   origin?: { lng: number; lat: number; label?: string } | null;
+  origin_status?: "available" | "unknown" | "denied" | "unsupported" | "unavailable" | "timeout";
   scenario?: string | null;
   intent?: unknown | null;
 }

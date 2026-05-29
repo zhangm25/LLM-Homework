@@ -30,12 +30,18 @@ class GeoPoint(BaseModel):
     label: Optional[str] = None
 
 
+OriginStatus = Literal["available", "unknown", "denied", "unsupported", "unavailable", "timeout"]
+
+
 class ChatRequest(BaseModel):
     message: str
     history: list[ChatMessage] = Field(default_factory=list)
     city: Optional[str] = None
-    # Browser geolocation for the trip start (§7.1). Optional.
+    # Browser geolocation for the trip start (§7.1). Optional. Even when no
+    # coordinate is available, origin_status is sent to P1 so the model can
+    # reason from "unknown" instead of the backend silently filling a start.
     origin: Optional[GeoPoint] = None
+    origin_status: OriginStatus = "unknown"
     # Carry the Intent Object across turns for incremental replanning (§6.4.6).
     intent: Optional[IntentObject] = None
     # Force a built-in demo scenario ("sc1".."sc4"); used by the preset chips.

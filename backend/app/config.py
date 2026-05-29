@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     deepseek_model: str = "deepseek-chat"
     llm_temperature_cold: float = 0.1  # P1/P3/P4 extraction & selection
     llm_temperature_warm: float = 0.6  # P5 narration
+    # Print LLM prompts and raw model responses to the backend console. Intended
+    # for local debugging only; leave off during demos with private user data.
+    llm_debug_log: bool = False
+    llm_debug_log_file: str = str(PROJECT_ROOT.parent / "_local_work" / "logs" / "llm_debug.log")
 
     # --- AMap (Web Service API, server side) ------------------------------
     amap_web_service_key: str = ""

@@ -17,16 +17,21 @@ import re
 from typing import AsyncIterator, Optional
 
 from ..config import get_settings
+from ..debug_log import write_debug_log
 from ..llm.client import get_llm
 from ..llm.prompts import (
     P1_INTENT_SYSTEM,
     P1_INTENT_USER,
+    P1_CLARIFY_SYSTEM,
+    P1_CLARIFY_USER,
     P1_PATCH_SYSTEM,
     P1_PATCH_USER,
     P1_REPAIR_SYSTEM,
     P1_REPAIR_USER,
     P1_SEGMENTS_SYSTEM,
     P1_SEGMENTS_USER,
+    P1_VALIDATE_SYSTEM,
+    P1_VALIDATE_USER,
     P5_NARRATE_SYSTEM,
     P5_NARRATE_USER,
 )
@@ -48,6 +53,22 @@ from .place_norm import normalize_place_name
 
 STREAM_DELAY = 0.02  # pacing for non-LLM narration, gives a "typing" feel
 NARRATION_CHUNK = 2  # characters per emitted chunk in fallback mode
+
+
+def _debug_state(label: str, **data) -> None:
+    if not get_settings().llm_debug_log:
+        return
+    safe = {}
+    for key, value in data.items():
+        if hasattr(value, "model_dump"):
+            safe[key] = value.model_dump()
+        else:
+            safe[key] = value
+    write_debug_log(
+        f"========== PIPELINE STATE [{label}] ==========\n"
+        f"{json.dumps(safe, ensure_ascii=False, default=str, indent=2)[:8000]}\n"
+        f"========== END PIPELINE STATE [{label}] =========="
+    )
 
 
 def _ev(**kwargs) -> StreamEvent:
@@ -118,6 +139,20 @@ def _as_str(value) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _as_bool(value, default: bool = True) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, str):
+        text = value.strip().lower()
+        if text in {"false", "0", "no", "否", "不", "不可用"}:
+            return False
+        if text in {"true", "1", "yes", "是", "可用"}:
+            return True
+    return bool(value)
 
 
 def _task_dwell(task_type: str, task: str, value) -> int:
@@ -199,7 +234,12 @@ def _intent_from_segments(data: dict) -> IntentObject:
         avoid_tags=[str(x) for x in (data.get("avoid_tags") or []) if x],
     )
     tw = data.get("time_window") or {}
+    clarification_needed = [str(x) for x in (data.get("clarification_needed") or []) if x]
+    is_available = _as_bool(data.get("is_available"), True) and not clarification_needed
     return IntentObject(
+        is_available=is_available,
+        pending_question_type=_as_str(data.get("pending_question_type")),
+        pending_field=_as_str(data.get("pending_field")),
         explicit_pois=explicit_pois,
         implicit_preferences=prefs,
         date=_as_str(data.get("date")) or "today",
@@ -212,7 +252,7 @@ def _intent_from_segments(data: dict) -> IntentObject:
         ),
         tasks=tasks,
         fixed_events=fixed_events,
-        clarification_needed=[str(x) for x in (data.get("clarification_needed") or []) if x],
+        clarification_needed=clarification_needed,
     )
 
 
@@ -272,6 +312,7 @@ def _end_semantics_issue(message: str, data: dict) -> str | None:
 _REMOVAL_MARKERS = ("去掉", "不去", "不用去", "删", "取消", "别去", "不想去", "砍掉", "少去")
 _PATCH_MARKERS = (
     "调整", "改", "换", "不是", "我想要的是", "应该是", "附近的", "重新安排", "修正",
+    "加一个", "加上", "再加", "顺便", "还有", "另外", "然后", "接着", "刚才", "上一轮", "前面",
     *_REMOVAL_MARKERS,
 )
 
@@ -279,6 +320,8 @@ _PATCH_MARKERS = (
 def _is_patch_turn(req: ChatRequest) -> bool:
     if not req.intent:
         return False
+    if isinstance(req.intent, IntentObject) and req.intent.is_available:
+        return True
     return any(m in req.message for m in _PATCH_MARKERS)
 
 
@@ -322,6 +365,99 @@ def _has_preference_choice(message: str) -> bool:
     return any(m in message for m in markers)
 
 
+def _is_clarification_turn(req: ChatRequest) -> bool:
+    return isinstance(req.intent, IntentObject) and not req.intent.is_available
+
+
+def _mark_unavailable(intent: IntentObject, question: str) -> IntentObject:
+    intent.is_available = False
+    if question and question not in intent.clarification_needed:
+        intent.clarification_needed = [question, *intent.clarification_needed]
+    return intent
+
+
+def _mark_pending(intent: IntentObject, issue: dict | None) -> IntentObject:
+    if not issue:
+        intent.pending_question_type = "general"
+        intent.pending_field = None
+        return intent
+    code = str(issue.get("code") or "")
+    field = _as_str(issue.get("field"))
+    pending = "general"
+    if "start" in code or field == "start":
+        pending = "start"
+    elif "end" in code or field == "end":
+        pending = "end"
+    elif "place" in code:
+        pending = "place_candidate"
+    elif "preference" in code or "dining" in code:
+        pending = "preference"
+    intent.pending_question_type = pending
+    intent.pending_field = field
+    return intent
+
+
+def _option_dicts(options: list[ClarifyOption]) -> list[dict]:
+    return [o.model_dump() for o in options]
+
+
+def _issue(
+    code: str,
+    field: str,
+    severity: str,
+    evidence: str,
+    question: str = "",
+    options: list[ClarifyOption] | None = None,
+) -> dict:
+    return {
+        "code": code,
+        "field": field,
+        "severity": severity,
+        "evidence": evidence,
+        "fallback_question": question,
+        "fallback_options": _option_dicts(options or []),
+    }
+
+
+def _merge_clarification_answer(prior: IntentObject, message: str) -> IntentObject:
+    """Small deterministic bridge for clicked clarify options and keyless mode.
+    The LLM path uses P1_CLARIFY; this covers "我选：终点是 X" without reparsing
+    the original request or looping on the same question."""
+    text = message or ""
+    merged = prior.model_copy(deep=True)
+    m = re.search(r"我选：\s*起点是\s*([^\n，,。；;]+)", text)
+    if m:
+        value = normalize_place_name(m.group(1).strip()) or m.group(1).strip()
+        if value:
+            merged.constraints.start = Endpoint(type="named", value=value, source="nl_extract")
+    m = re.search(r"我选：\s*终点是\s*([^\n，,。；;]+)", text)
+    if m:
+        value = normalize_place_name(m.group(1).strip()) or m.group(1).strip()
+        if value:
+            merged.constraints.end = Endpoint(type="named", value=value, source="nl_extract")
+    m = re.search(r"我选：\s*(?:餐厅偏好|偏好)\s*=\s*([^\n，,。；;]+)", text)
+    if m:
+        pref = m.group(1).strip()
+        if pref and pref not in merged.implicit_preferences.vibe_tags:
+            merged.implicit_preferences.vibe_tags.append(pref)
+    if not _has_preference_choice(text):
+        answer = text.strip()
+        answer = re.sub(r"^我选：\s*", "", answer).strip()
+        if answer and "\n" not in answer and len(answer) <= 80:
+            if prior.pending_question_type == "start":
+                value = normalize_place_name(answer) or answer
+                merged.constraints.start = Endpoint(type="named", value=value, source="nl_extract")
+            elif prior.pending_question_type == "end":
+                value = normalize_place_name(answer) or answer
+                merged.constraints.end = Endpoint(type="named", value=value, source="nl_extract")
+    if merged.constraints.start.value or (merged.constraints.end and merged.constraints.end.value) or _has_preference_choice(text):
+        merged.is_available = True
+        merged.clarification_needed = []
+        merged.pending_question_type = None
+        merged.pending_field = None
+    return merged
+
+
 _GENERIC_RETURN_ENDPOINTS = {
     "家", "家里", "住处", "住的地方", "宿舍", "酒店", "宾馆", "民宿", "公寓",
     "公司", "单位", "办公室",
@@ -345,6 +481,10 @@ _SPECIFIC_ENDPOINT_HINTS = (
 )
 _SCHOOL_PLACE_TOKENS = ("大学", "学院", "学校", "中学", "小学")
 _SCHOOL_DETAIL_TOKENS = ("校区", "东门", "西门", "南门", "北门", "楼", "园区", "附中", "附小")
+_VAGUE_CURRENT_START_RE = re.compile(
+    r"(?:从|由|自)\s*(?:这里|这儿|当前位置|当前的位置|我这|附近)\s*(?:出发|开始|走|去|到)?|"
+    r"(?:我在|现在在|目前在|人在)\s*(?:这里|这儿|当前位置|当前的位置|我这|附近)"
+)
 
 
 def _ambiguous_return_phrase(message: str, intent: IntentObject) -> str | None:
@@ -367,13 +507,144 @@ def _ambiguous_return_phrase(message: str, intent: IntentObject) -> str | None:
     return None
 
 
-def _end_clarification_question(req: ChatRequest, intent: IntentObject) -> str | None:
+def _origin_context_text(req: ChatRequest) -> str:
+    if req.origin:
+        label = req.origin.label or "浏览器定位"
+        return f"可用：{label} [{req.origin.lng:.4f},{req.origin.lat:.4f}]"
+    status_text = {
+        "denied": "unknown（用户拒绝了浏览器定位权限）",
+        "unsupported": "unknown（浏览器不支持定位）",
+        "unavailable": "unknown（浏览器暂时无法取得位置）",
+        "timeout": "unknown（浏览器定位超时）",
+        "available": "unknown（前端标记可用但未附带坐标）",
+        "unknown": "unknown（用户当前位置未提供）",
+    }
+    return status_text.get(req.origin_status, "unknown（用户当前位置未提供）")
+
+
+def _apply_origin_to_start(req: ChatRequest, intent: IntentObject) -> IntentObject:
+    """Bind browser geolocation to the start endpoint before routing.
+
+    LLMs often shorten a long reverse-geocoded address ("北京市海淀区...清华附中")
+    to a POI name ("清华大学附属中学"). That is pleasant prose but bad routing:
+    text geocoding can become ambiguous. If the named start clearly came from
+    the browser origin label, keep the full label and exact coordinates.
+    """
+    if not req.origin:
+        return intent
+    label = (req.origin.label or "").strip()
+    loc = [req.origin.lng, req.origin.lat]
+    start = intent.constraints.start
+    if start.type == "current":
+        start.source = "geolocation"
+        start.location = loc
+        if label:
+            start.value = label
+        return intent
+    value = (start.value or "").strip()
+    if label and value and (value in label or label in value):
+        start.value = label
+        start.source = "geolocation"
+        start.location = loc
+    elif start.source == "geolocation":
+        start.location = loc
+        if label and not start.value:
+            start.value = label
+    return intent
+
+
+def _start_clarification(req: ChatRequest, intent: IntentObject) -> tuple[str, list[ClarifyOption]] | None:
+    """When the user explicitly says "from here" but the browser location is not
+    available, ask instead of quietly falling back to the city centre."""
+    if _has_clicked_place_choice(req.message, "start") or req.origin or not _VAGUE_CURRENT_START_RE.search(req.message or ""):
+        return None
+    start = intent.constraints.start
+    if start.type == "named" and start.value:
+        return None
+    base = req.message.strip()
+    options: list[ClarifyOption] = []
+    first_place = next((p.name for p in intent.explicit_pois if p.name), None)
+    if first_place:
+        options.append(ClarifyOption(
+            id="start-first-place",
+            label=f"从 {first_place}",
+            description="把行程中第一个明确地点当作出发点。",
+            message=f"{base}\n\n我选：起点是 {first_place}",
+        ))
+    question = (
+        "我还拿不到你的当前位置，所以「从这里」暂时不可导航。"
+        + ("你可以点一个猜测，或直接在输入框里补充具体起点。" if options else "请直接补充具体起点。")
+    )
+    return question, options
+
+
+def _start_issue(req: ChatRequest, intent: IntentObject) -> dict | None:
+    clarify = _start_clarification(req, intent)
+    if not clarify:
+        return None
+    question, options = clarify
+    question = (
+        "我现在拿不到你的当前位置（浏览器定位不可用），所以还不能确定真实出发点。"
+        "你可以开启定位后重试，或者直接告诉我你现在所在的小区、楼宇、校门、地标或详细地址。"
+    )
+    return _issue(
+        "current_start_unknown",
+        "start",
+        "blocking",
+        "用户把「这里/当前位置」作为起点，但浏览器定位不可用；需要用户开启定位或补充当前具体位置。",
+        question,
+        options,
+    )
+
+
+def _end_clarification(req: ChatRequest, intent: IntentObject) -> tuple[str, list[ClarifyOption]] | None:
+    if _has_clicked_place_choice(req.message, "end"):
+        return None
     phrase = _ambiguous_return_phrase(req.message, intent)
     if not phrase:
         return None
-    return (
+    base = req.message.strip()
+    options: list[ClarifyOption] = []
+    start = intent.constraints.start
+    if start.type == "named" and start.value:
+        options.append(ClarifyOption(
+            id="end-start",
+            label="回到起点",
+            description=f"终点按「{start.value}」处理。",
+            message=f"{base}\n\n我选：终点是 {start.value}",
+        ))
+    elif req.origin:
+        label = req.origin.label or "当前位置"
+        options.append(ClarifyOption(
+            id="end-origin",
+            label="回到当前位置",
+            description=label,
+            message=f"{base}\n\n我选：终点是 {label}",
+        ))
+    question = (
         f"你提到最后要回「{phrase}」，但这还不是一个可导航的具体终点。"
-        "请补充小区/大厦/酒店名/门牌或附近地标；例如直接说“终点是 XX 小区东门”或“家在 XX”。"
+        + (
+            "我可以先按下面的猜测继续，或者你直接补充小区/大厦/酒店名/门牌或附近地标。"
+            if options
+            else "请直接补充小区/大厦/酒店名/门牌或附近地标。"
+        )
+    )
+    return question, options
+
+
+def _end_issue(req: ChatRequest, intent: IntentObject) -> dict | None:
+    clarify = _end_clarification(req, intent)
+    if not clarify:
+        return None
+    question, options = clarify
+    phrase = _ambiguous_return_phrase(req.message, intent) or ""
+    return _issue(
+        "ambiguous_end",
+        "end",
+        "blocking",
+        f"用户提到返回「{phrase}」，但没有具体可导航终点。",
+        question,
+        options,
     )
 
 
@@ -421,10 +692,22 @@ async def _place_choice_clarify(req: ChatRequest, intent: IntentObject) -> tuple
     city = intent.constraints.city or req.city or get_settings().default_city
     anchors: list[tuple[str, str]] = []
     start = intent.constraints.start
-    if start.type == "named" and start.value and not _has_clicked_place_choice(req.message, "start"):
+    if (
+        start.type == "named"
+        and start.value
+        and start.source != "geolocation"
+        and not start.location
+        and not _has_clicked_place_choice(req.message, "start")
+    ):
         anchors.append(("start", start.value))
     end = intent.constraints.end
-    if end and end.value and not _has_clicked_place_choice(req.message, "end"):
+    if (
+        end
+        and end.value
+        and end.source != "geolocation"
+        and not end.location
+        and not _has_clicked_place_choice(req.message, "end")
+    ):
         anchors.append(("end", end.value))
 
     for role, place in anchors:
@@ -437,6 +720,21 @@ async def _place_choice_clarify(req: ChatRequest, intent: IntentObject) -> tuple
         question = f"「{place}」有多个校区/地址。请确认你说的{label}是哪一个？"
         return question, _place_choice_options(req, role, place, pois)
     return None
+
+
+async def _place_choice_issue(req: ChatRequest, intent: IntentObject) -> dict | None:
+    clarify = await _place_choice_clarify(req, intent)
+    if not clarify:
+        return None
+    question, options = clarify
+    return _issue(
+        "ambiguous_place_candidate",
+        "start_or_end",
+        "blocking",
+        "起点或终点命中多个真实候选，需要确认具体校区/地址。",
+        question,
+        options,
+    )
 
 
 def _dining_choice_options(req: ChatRequest, task: Task) -> list[ClarifyOption]:
@@ -516,6 +814,25 @@ def _clarify_options(req: ChatRequest, intent: IntentObject) -> tuple[str, list[
     return "", []
 
 
+def _preference_issue(req: ChatRequest, intent: IntentObject) -> dict | None:
+    question, options = _clarify_options(req, intent)
+    if not options:
+        return None
+    code = "preference_choice"
+    field = "preferences"
+    if options and options[0].id.startswith("dining"):
+        code = "dining_preference_unspecified"
+        field = "tasks"
+    return _issue(
+        code,
+        field,
+        "advisory",
+        "偏好会影响候选选择，但通常可以由模型和默认策略先行推断。",
+        question,
+        options,
+    )
+
+
 def _is_plannable(intent: IntentObject) -> bool:
     """Enough signal to build a route: at least one place, task, or hard anchor.
     Non-trip / empty / self-contradictory input lands here as False so we ask
@@ -544,6 +861,98 @@ def _not_plannable_question(intent: Optional[IntentObject]) -> str:
     return _DEFAULT_CLARIFY_Q
 
 
+async def _validation_issues(req: ChatRequest, intent: IntentObject) -> list[dict]:
+    issues: list[dict] = []
+    for item in (_start_issue(req, intent), _end_issue(req, intent)):
+        if item:
+            issues.append(item)
+    place = await _place_choice_issue(req, intent)
+    if place:
+        issues.append(place)
+    return issues
+
+
+def _fallback_issue_clarify(intent: IntentObject, issues: list[dict]) -> tuple[str, list[ClarifyOption], IntentObject] | None:
+    blocking = next((i for i in issues if i.get("severity") == "blocking"), None)
+    if not blocking:
+        return None
+    question = _as_str(blocking.get("fallback_question")) or _DEFAULT_CLARIFY_Q
+    options = [
+        ClarifyOption(**o)
+        for o in (blocking.get("fallback_options") or [])
+        if isinstance(o, dict) and o.get("id") and o.get("label") and o.get("message")
+    ]
+    return question, options, _mark_pending(_mark_unavailable(intent, question), blocking)
+
+
+def _intent_from_validation_patch(raw_intent, fallback: IntentObject) -> IntentObject:
+    if not isinstance(raw_intent, dict):
+        return fallback
+    # P1_VALIDATE may return either the segment schema or the internal IntentObject
+    # schema. Accept both so the judge prompt can stay compact.
+    if "segments" in raw_intent:
+        return _intent_from_segments(raw_intent)
+    try:
+        return IntentObject.model_validate(raw_intent)
+    except Exception:
+        return fallback
+
+
+async def _validate_with_llm(req: ChatRequest, intent: IntentObject, issues: list[dict], llm) -> tuple[str, list[ClarifyOption], IntentObject] | IntentObject | None:
+    settings = get_settings()
+    user = P1_VALIDATE_USER.format(
+        message=req.message,
+        intent=intent.model_dump_json(),
+        issues=json.dumps(issues, ensure_ascii=False),
+        city=req.city or "未知",
+        origin=_origin_context_text(req),
+        history=_format_history(req),
+    )
+    _debug_state("validation:llm_request", issues=issues, intent=intent)
+    data = await llm.complete_json(P1_VALIDATE_SYSTEM, user, settings.llm_temperature_cold, stage="P1_VALIDATE")
+    _debug_state("validation:llm_response", response=data)
+    action = _as_str(data.get("action")) or "proceed"
+    if action == "patch_intent":
+        return augment_intent(_intent_from_validation_patch(data.get("intent"), intent), req.message)
+    if action == "ask_user":
+        question = _as_str(data.get("question")) or _DEFAULT_CLARIFY_Q
+        options = []
+        for raw in data.get("options") or []:
+            if isinstance(raw, dict) and raw.get("id") and raw.get("label") and raw.get("message"):
+                options.append(ClarifyOption(
+                    id=str(raw.get("id")),
+                    label=str(raw.get("label")),
+                    description=str(raw.get("description") or ""),
+                    message=str(raw.get("message")),
+                ))
+        first_issue = issues[0] if issues else None
+        return question, options, _mark_pending(_mark_unavailable(intent, question), first_issue)
+    return intent
+
+
+async def _resolve_validation(req: ChatRequest, intent: IntentObject) -> tuple[str, list[ClarifyOption], IntentObject] | IntentObject:
+    issues = await _validation_issues(req, intent)
+    _debug_state("validation:issues", issues=issues)
+    if not issues:
+        return intent
+    llm = get_llm()
+    if llm.enabled:
+        try:
+            decision = await _validate_with_llm(req, intent, issues, llm)
+            if decision is not None:
+                return decision
+        except Exception:
+            _debug_state("validation:llm_failed")
+            pass
+    fallback = _fallback_issue_clarify(intent, issues)
+    if fallback:
+        question, options, pending = fallback
+        _debug_state("validation:fallback_ask", question=question, options=options, intent=pending)
+    else:
+        _debug_state("validation:fallback_proceed")
+    return fallback if fallback else intent
+
+
 async def _extract_intent(req: ChatRequest) -> IntentObject:
     """LLM extraction with a deterministic safety net.
 
@@ -555,31 +964,81 @@ async def _extract_intent(req: ChatRequest) -> IntentObject:
     """
     llm = get_llm()
     intent: Optional[IntentObject] = None
+    _debug_state(
+        "extract_intent:start",
+        message=req.message,
+        has_prior_intent=isinstance(req.intent, IntentObject),
+        prior_available=req.intent.is_available if isinstance(req.intent, IntentObject) else None,
+        llm_enabled=llm.enabled,
+    )
+    if _is_clarification_turn(req):
+        prior = req.intent
+        _debug_state(
+            "extract_intent:route",
+            route="P1_CLARIFY",
+            pending_question_type=prior.pending_question_type,
+            pending_field=prior.pending_field,
+            clarification_needed=prior.clarification_needed,
+        )
+        if llm.enabled:
+            try:
+                intent = await _complete_pending_intent_llm(req, prior, llm)
+            except Exception:
+                _debug_state("extract_intent:llm_failed", route="P1_CLARIFY")
+                intent = None
+        if intent is None:
+            intent = _merge_clarification_answer(prior, req.message)
+            _debug_state("extract_intent:fallback", route="P1_CLARIFY", intent=intent)
+        intent = _apply_origin_to_start(req, augment_intent(intent, req.message))
+        _debug_state("extract_intent:done", route="P1_CLARIFY", intent=intent)
+        return intent
+
     if llm.enabled:
         try:
+            _debug_state(
+                "extract_intent:route",
+                route="P1_PATCH" if _is_patch_turn(req) else "P1_SEGMENTS",
+            )
             intent = await _extract_intent_llm(req, llm)
         except Exception:
+            _debug_state(
+                "extract_intent:llm_failed",
+                route="P1_PATCH" if _is_patch_turn(req) else "P1_SEGMENTS",
+            )
             intent = None  # degrade to the heuristic below rather than 500
     if intent is None:
         intent = augment_intent(extract_intent_heuristic(req.message, req.city), req.message)
+        _debug_state("extract_intent:fallback", route="heuristic", intent=intent)
     else:
         intent = augment_intent(intent, req.message)
     # Multi-turn safety net applied to BOTH paths: a patch must not silently
     # destroy the prior itinerary — especially when the LLM patch timed out and
     # we fell back to the (context-free) heuristic here.
-    if _is_patch_turn(req) and isinstance(req.intent, IntentObject):
+    if isinstance(req.intent, IntentObject):
         intent = _merge_patch(req.intent, intent, req.message)
+    intent = _apply_origin_to_start(req, intent)
+    _debug_state("extract_intent:done", intent=intent)
     return intent
+
+
+async def _complete_pending_intent_llm(req: ChatRequest, prior: IntentObject, llm) -> IntentObject:
+    settings = get_settings()
+    user = P1_CLARIFY_USER.format(
+        intent=prior.model_dump_json(),
+        questions="\n".join(prior.clarification_needed) or "（无）",
+        message=req.message,
+        city=req.city or "未知",
+        origin=_origin_context_text(req),
+        history=_format_history(req),
+    )
+    draft = await llm.complete_json(P1_CLARIFY_SYSTEM, user, settings.llm_temperature_cold, stage="P1_CLARIFY")
+    return _intent_from_validation_patch(draft, prior)
 
 
 async def _extract_intent_llm(req: ChatRequest, llm) -> IntentObject:
     settings = get_settings()
     cold = settings.llm_temperature_cold
-    origin_text = (
-        f"{req.origin.label or ''} [{req.origin.lng:.4f},{req.origin.lat:.4f}]"
-        if req.origin
-        else "未知（默认当前位置）"
-    )
+    origin_text = _origin_context_text(req)
     is_patch = _is_patch_turn(req)
     if is_patch:
         user = P1_PATCH_USER.format(
@@ -589,15 +1048,20 @@ async def _extract_intent_llm(req: ChatRequest, llm) -> IntentObject:
             origin=origin_text,
             history=_format_history(req),
         )
-        draft = await llm.complete_json(P1_PATCH_SYSTEM, user, cold)
+        draft = await llm.complete_json(P1_PATCH_SYSTEM, user, cold, stage="P1_PATCH")
     else:
         user = P1_SEGMENTS_USER.format(
             message=req.message,
             city=req.city or "未知",
             origin=origin_text,
+            intent=(
+                req.intent.model_dump_json()
+                if isinstance(req.intent, IntentObject)
+                else json.dumps(req.intent, ensure_ascii=False) if req.intent else "（无）"
+            ),
             history=_format_history(req),
         )
-        draft = await llm.complete_json(P1_SEGMENTS_SYSTEM, user, cold)
+        draft = await llm.complete_json(P1_SEGMENTS_SYSTEM, user, cold, stage="P1_SEGMENTS")
 
     # Audit + self-repair (§6.4.4) only when we actually detect a problem,
     # instead of paying a second round-trip on every clean extraction. The
@@ -609,10 +1073,12 @@ async def _extract_intent_llm(req: ChatRequest, llm) -> IntentObject:
             draft=json.dumps(draft, ensure_ascii=False),
             issue=issue,
         )
-        draft = await llm.complete_json(P1_REPAIR_SYSTEM, repair_user, cold)
+        draft = await llm.complete_json(P1_REPAIR_SYSTEM, repair_user, cold, stage="P1_REPAIR")
     # Patch-merge is applied by the caller (_extract_intent) so it also covers
-    # the heuristic fallback when this LLM path raises.
-    return _intent_from_segments(draft)
+    # the heuristic fallback when this LLM path raises. Accept either the
+    # segment schema or the internal IntentObject schema; smaller models
+    # sometimes mirror the schema they saw in the user prompt.
+    return _intent_from_validation_patch(draft, IntentObject())
 
 
 async def plan_stream(req: ChatRequest) -> AsyncIterator[StreamEvent]:
@@ -647,26 +1113,46 @@ async def plan_stream(req: ChatRequest) -> AsyncIterator[StreamEvent]:
 
         # --- 2. live chain ----------------------------------------------
         yield _ev(type="thinking", text="正在理解你的需求 🧭")
+        _debug_state(
+            "plan_stream:start",
+            message=req.message,
+            city=req.city,
+            origin=req.origin,
+            origin_status=req.origin_status,
+            has_intent=isinstance(req.intent, IntentObject),
+            scenario=req.scenario,
+        )
         intent = await _extract_intent(req)
+        _debug_state("plan_stream:after_extract", intent=intent)
 
-        end_question = _end_clarification_question(req, intent)
-        if end_question:
-            yield _ev(type="clarify", text=end_question, options=[], intent=intent)
+        if not intent.is_available and intent.clarification_needed:
+            _debug_state(
+                "plan_stream:clarify_from_llm",
+                text=" ".join(intent.clarification_needed[:2]),
+                intent=intent,
+            )
+            yield _ev(type="clarify", text=" ".join(intent.clarification_needed[:2]), options=[], intent=intent)
             yield _ev(type="done")
             return
 
-        place_choice = await _place_choice_clarify(req, intent)
-        if place_choice:
-            question, options = place_choice
-            yield _ev(type="clarify", text=question, options=options, intent=intent)
+        validation = await _resolve_validation(req, intent)
+        if isinstance(validation, tuple):
+            question, options, pending_intent = validation
+            _debug_state("plan_stream:clarify_from_validation", text=question, options=options, intent=pending_intent)
+            yield _ev(type="clarify", text=question, options=options, intent=pending_intent)
             yield _ev(type="done")
             return
+        intent = validation
+        _debug_state("plan_stream:after_validation", intent=intent)
 
         # Non-trip / contradictory / empty-after-parse input: ask the right
         # question instead of fabricating a degenerate plan. The model often
         # already wrote a good question into clarification_needed (FR-2).
         if not _is_plannable(intent):
-            yield _ev(type="clarify", text=_not_plannable_question(intent), options=[], intent=intent)
+            question = _not_plannable_question(intent)
+            intent = _mark_unavailable(intent, question)
+            _debug_state("plan_stream:not_plannable", text=question, intent=intent)
+            yield _ev(type="clarify", text=question, options=[], intent=intent)
             yield _ev(type="done")
             return
 
@@ -675,15 +1161,10 @@ async def plan_stream(req: ChatRequest) -> AsyncIterator[StreamEvent]:
         yield _ev(type="thinking", text=_extraction_detail(intent))
         await asyncio.sleep(0.15)
 
-        question, options = _clarify_options(req, intent)
-        if options:
-            yield _ev(type="clarify", text=question, options=options, intent=intent)
-            yield _ev(type="done")
-            return
-
         yield _ev(type="thinking", text="正在用高德检索真实地点…")
         city = intent.constraints.city or req.city or settings.default_city
         origin = [req.origin.lng, req.origin.lat] if req.origin else None
+        _debug_state("plan_stream:build_plan", city=city, origin=origin, intent=intent)
         plan = await build_plan(intent, origin, city)
         yield _ev(type="thinking", text="已拿到候选地点，正在计算分段路程和停留时间…")
         await asyncio.sleep(0.15)
@@ -699,7 +1180,7 @@ async def plan_stream(req: ChatRequest) -> AsyncIterator[StreamEvent]:
                     itinerary_text=_itinerary_text(plan),
                 )
                 async for delta in llm.stream_text(
-                    P5_NARRATE_SYSTEM, user, settings.llm_temperature_warm
+                    P5_NARRATE_SYSTEM, user, settings.llm_temperature_warm, stage="P5_NARRATE"
                 ):
                     yield _ev(type="message", text=delta)
             except Exception:

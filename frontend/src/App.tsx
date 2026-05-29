@@ -13,6 +13,8 @@ import type {
   StreamEvent,
 } from "./types";
 
+type OriginStatus = NonNullable<ChatRequestBody["origin_status"]>;
+
 interface Preset {
   id: string;
   label: string;
@@ -50,9 +52,11 @@ const PRESETS: Preset[] = [
 ];
 
 function itemsToHistory(items: ChatItem[]): ChatMessage[] {
-  return items
-    .filter((it): it is Extract<ChatItem, { kind: "msg" }> => it.kind === "msg")
-    .map((it) => ({ role: it.role, content: it.content }));
+  return items.flatMap((it): ChatMessage[] => {
+    if (it.kind === "msg") return [{ role: it.role, content: it.content }];
+    if (it.kind === "clarify") return [{ role: "assistant", content: it.text }];
+    return [];
+  });
 }
 
 export default function App() {
@@ -62,6 +66,7 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [city, setCity] = useState("北京");
   const [locationLabel, setLocationLabel] = useState("点击获取位置");
+  const [originStatus, setOriginStatus] = useState<OriginStatus>("unknown");
   const [locating, setLocating] = useState(false);
   const [swappingIndex, setSwappingIndex] = useState<number | null>(null);
   const [streamingId, setStreamingId] = useState<string | null>(null);
@@ -98,11 +103,13 @@ export default function App() {
   const requestLocation = (manual = true) => {
     if (!navigator.geolocation) {
       setLocationLabel("浏览器不支持定位");
+      setOriginStatus("unsupported");
       if (manual) setThinking("当前浏览器不支持定位，可以在对话里说“从 XX 出发”。");
       return;
     }
 
     setLocating(true);
+    setOriginStatus("unknown");
     if (manual) setThinking("正在请求浏览器定位权限…");
     navigator.geolocation.getCurrentPosition(
       async (pos) => {
@@ -116,6 +123,7 @@ export default function App() {
           label: address ?? fallback,
         };
         originRef.current = origin;
+        setOriginStatus("available");
         setLocationLabel(origin.label);
         setLocating(false);
         if (manual) setThinking(null);
@@ -127,6 +135,14 @@ export default function App() {
             : err.code === err.POSITION_UNAVAILABLE
               ? "位置不可用"
               : "定位超时";
+        const status: OriginStatus =
+          err.code === err.PERMISSION_DENIED
+            ? "denied"
+            : err.code === err.POSITION_UNAVAILABLE
+              ? "unavailable"
+              : "timeout";
+        originRef.current = null;
+        setOriginStatus(status);
         setLocationLabel(reason);
         setLocating(false);
         if (manual) setThinking(`${reason}。你仍然可以在对话里说“从 清华大学 出发”。`);
@@ -138,6 +154,7 @@ export default function App() {
   // The user picked a start from the candidate dropdown — commit it as origin.
   const pickOrigin = (c: PlaceCandidate) => {
     originRef.current = { lng: c.lng, lat: c.lat, label: c.label };
+    setOriginStatus("available");
     setLocationLabel(c.label);
     setThinking(null);
   };
@@ -158,6 +175,7 @@ export default function App() {
         break;
       case "clarify":
         setThinking(null);
+        intentRef.current = ev.intent ?? intentRef.current;
         setItems((prev) => [
           ...prev,
           { id: uid(), kind: "clarify", text: ev.text, options: ev.options ?? [] },
@@ -217,6 +235,7 @@ export default function App() {
       history,
       city: presetCity ?? city,
       origin: originRef.current,
+      origin_status: originStatus,
       scenario: scenario ?? null,
       intent: fresh ? null : intentRef.current,
     };

@@ -28,7 +28,11 @@ body{font-family:var(--font);background:var(--bg);color:var(--ink);
 .topbar .spacer{flex:1}
 .pill{font-size:12.5px;color:var(--ink-2);background:var(--inset);border:1px solid var(--line-2);
   border-radius:999px;padding:6px 13px;max-width:280px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.loc-pill{font-family:inherit;cursor:pointer}
+.loc-pill{font-family:inherit;cursor:pointer;display:block;max-width:min(520px,42vw);overflow-x:auto;overflow-y:hidden;
+  text-overflow:clip;scrollbar-width:thin;scrollbar-color:var(--line-2) transparent}
+.loc-pill::-webkit-scrollbar{height:4px}
+.loc-pill::-webkit-scrollbar-thumb{background:var(--line-2);border-radius:999px}
+.loc-pill::-webkit-scrollbar-track{background:transparent}
 .loc-pill:hover{border-color:var(--accent-bd);color:var(--accent-d);background:var(--accent-soft)}
 .loc-pill:disabled{opacity:.65;cursor:wait}
 .locbox{display:flex;align-items:center;gap:8px;min-width:0}
@@ -225,7 +229,7 @@ svg.map{width:100%;height:100%;display:block}
   .stream{max-height:calc(100vh - 240px)}}
 @media (max-width:640px){.clarify-options,.segment-nav{grid-template-columns:1fr}.map-top{align-items:flex-start;gap:8px;flex-direction:column}.map-top .stat{flex-wrap:wrap}}
 @media (max-width:640px){.export-actions{grid-template-columns:1fr}}
-@media (max-width:760px){.topbar{align-items:flex-start;flex-wrap:wrap}.topbar .spacer{display:none}.locbox{width:100%;flex-wrap:wrap}.manual-loc{flex:1}.manual-loc input{width:100%;min-width:150px}}
+@media (max-width:760px){.topbar{align-items:flex-start;flex-wrap:wrap}.topbar .spacer{display:none}.locbox{width:100%;flex-wrap:wrap}.loc-pill{max-width:100%}.manual-loc{flex:1}.manual-loc input{width:100%;min-width:150px}}
 
 /* ===========================================================================
  * Additions for the interactive app (not in the static mockup)

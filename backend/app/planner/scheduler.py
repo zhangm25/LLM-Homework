@@ -568,9 +568,9 @@ async def build_plan(
     # --- start: honour a named start, else geo fix, else city centre -----
     start = intent.constraints.start
     start_named = start.type == "named" and bool(start.value)
-    start_loc = origin
+    start_loc = start.location or origin
     if start_named:
-        start_loc = await _geocode(start.value, city) or origin
+        start_loc = start.location or await _geocode(start.value, city) or origin
     if start_loc is None:
         start_loc = CITY_CENTER.get(city, CITY_CENTER[DEFAULT_CITY])
 

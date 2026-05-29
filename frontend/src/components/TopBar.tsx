@@ -73,7 +73,13 @@ export default function TopBar({
       <div className="tagline">说一句话，我帮你把行程安排好</div>
       <div className="spacer" />
       <div className="locbox">
-        <button className="pill loc-pill" type="button" onClick={onLocate} disabled={locating}>
+        <button
+          className="pill loc-pill"
+          type="button"
+          onClick={onLocate}
+          disabled={locating}
+          title={locating ? "定位中…" : locationLabel}
+        >
           📍 {locating ? "定位中…" : locationLabel}
         </button>
         <div className="manual-loc" ref={boxRef}>

@@ -116,6 +116,9 @@ class FixedEvent(BaseModel):
 
 
 class IntentObject(BaseModel):
+    is_available: bool = True
+    pending_question_type: Optional[Literal["start", "end", "place_candidate", "preference", "general"]] = None
+    pending_field: Optional[str] = None
     explicit_pois: list[ExplicitPOI] = Field(default_factory=list)
     implicit_preferences: ImplicitPreferences = Field(default_factory=ImplicitPreferences)
     date: str = "today"

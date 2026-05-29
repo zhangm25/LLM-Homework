@@ -16,6 +16,7 @@ from functools import lru_cache
 from typing import AsyncIterator, Optional
 
 from ..config import get_settings
+from ..debug_log import announce_debug_log_path, write_debug_log
 
 
 def _strip_code_fence(text: str) -> str:
@@ -26,6 +27,11 @@ def _strip_code_fence(text: str) -> str:
         if cleaned.endswith("```"):
             cleaned = cleaned[: -3]
     return cleaned.strip()
+
+
+def _preview(text: str, limit: int = 6000) -> str:
+    text = text or ""
+    return text if len(text) <= limit else text[:limit] + f"\n...<truncated {len(text) - limit} chars>"
 
 
 class OpenAICompatibleLLMClient:
@@ -43,10 +49,34 @@ class OpenAICompatibleLLMClient:
                 timeout=settings.llm_timeout_s,
                 max_retries=settings.llm_max_retries,
             )
+        announce_debug_log_path()
 
     @property
     def enabled(self) -> bool:
         return self._client is not None
+
+    def _debug_log(self, stage: str, system: str, user: str, raw: str | None = None) -> None:
+        if not self._settings.llm_debug_log:
+            return
+        text = (
+            "\n"
+            f"========== LLM DEBUG [{stage}] ==========\n"
+            f"provider={self._settings.effective_llm_provider} "
+            f"model={self._settings.effective_llm_model} "
+            f"base_url={self._settings.effective_llm_base_url}\n"
+            "----- system -----\n"
+            f"{_preview(system)}\n"
+            "----- user -----\n"
+            f"{_preview(user)}"
+        )
+        if raw is not None:
+            text += (
+                "\n"
+                "----- raw response -----\n"
+                f"{_preview(raw)}\n"
+                f"========== END LLM DEBUG [{stage}] ==========\n"
+            )
+        write_debug_log(text)
 
     async def check_health(self) -> dict:
         """Tiny live probe used by /api/config so the UI can distinguish
@@ -64,16 +94,18 @@ class OpenAICompatibleLLMClient:
                 "message": "未配置 LLM API Key",
             }
         try:
+            system = "你是连通性检查。只输出 JSON。"
+            user = '请只输出 {"ok": true}'
             resp = await self._client.chat.completions.create(
                 model=model,
                 messages=[
                     {
                         "role": "system",
-                        "content": "你是连通性检查。只输出 JSON。",
+                        "content": system,
                     },
                     {
                         "role": "user",
-                        "content": '请只输出 {"ok": true}',
+                        "content": user,
                     },
                 ],
                 temperature=0,
@@ -81,6 +113,7 @@ class OpenAICompatibleLLMClient:
                 response_format={"type": "json_object"},
             )
             raw = resp.choices[0].message.content or "{}"
+            self._debug_log("health", system, user, raw)
             data = json.loads(_strip_code_fence(raw))
             ok = bool(data.get("ok"))
             return {
@@ -102,7 +135,7 @@ class OpenAICompatibleLLMClient:
             }
 
     async def complete_json(
-        self, system: str, user: str, temperature: Optional[float] = None
+        self, system: str, user: str, temperature: Optional[float] = None, stage: str = "json"
     ) -> dict:
         """Return parsed JSON. One repair attempt on malformed output."""
         assert self._client is not None
@@ -118,24 +151,26 @@ class OpenAICompatibleLLMClient:
             response_format={"type": "json_object"},
         )
         raw = resp.choices[0].message.content or "{}"
+        self._debug_log(stage, system, user, raw)
         try:
             return json.loads(_strip_code_fence(raw))
         except json.JSONDecodeError:
             # Self-repair: feed the bad output back once.
             messages.append({"role": "assistant", "content": raw})
-            messages.append(
-                {"role": "user", "content": "上面的输出不是合法 JSON，请只重新输出合法 JSON。"}
-            )
+            repair_user = "上面的输出不是合法 JSON，请只重新输出合法 JSON。"
+            messages.append({"role": "user", "content": repair_user})
             resp = await self._client.chat.completions.create(
                 model=self._settings.effective_llm_model,
                 messages=messages,
                 temperature=temp,
                 response_format={"type": "json_object"},
             )
-            return json.loads(_strip_code_fence(resp.choices[0].message.content or "{}"))
+            repaired = resp.choices[0].message.content or "{}"
+            self._debug_log(f"{stage}:repair", system, repair_user, repaired)
+            return json.loads(_strip_code_fence(repaired))
 
     async def complete_text(
-        self, system: str, user: str, temperature: Optional[float] = None
+        self, system: str, user: str, temperature: Optional[float] = None, stage: str = "text"
     ) -> str:
         assert self._client is not None
         temp = self._settings.llm_temperature_warm if temperature is None else temperature
@@ -147,10 +182,12 @@ class OpenAICompatibleLLMClient:
             ],
             temperature=temp,
         )
-        return resp.choices[0].message.content or ""
+        raw = resp.choices[0].message.content or ""
+        self._debug_log(stage, system, user, raw)
+        return raw
 
     async def stream_text(
-        self, system: str, user: str, temperature: Optional[float] = None
+        self, system: str, user: str, temperature: Optional[float] = None, stage: str = "stream"
     ) -> AsyncIterator[str]:
         assert self._client is not None
         temp = self._settings.llm_temperature_warm if temperature is None else temperature
@@ -163,10 +200,13 @@ class OpenAICompatibleLLMClient:
             temperature=temp,
             stream=True,
         )
+        chunks: list[str] = []
         async for chunk in stream:
             delta = chunk.choices[0].delta.content if chunk.choices else None
             if delta:
+                chunks.append(delta)
                 yield delta
+        self._debug_log(stage, system, user, "".join(chunks))
 
 
 @lru_cache
