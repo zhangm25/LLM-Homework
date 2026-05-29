@@ -325,8 +325,8 @@ export default function App() {
 
       <div className="footer">
         RoamMind · 对话式行程规划助手
-        {config && !config.llm_enabled && " · 示例模式（未配置 DeepSeek Key，预置场景仍可演示）"}
-        {config && config.llm_enabled && config.llm?.ok && ` · LLM 已连接：${config.llm.model}`}
+        {config && !config.llm_enabled && " · 示例模式（未配置 LLM Key，预置场景仍可演示）"}
+        {config && config.llm_enabled && config.llm?.ok && ` · LLM 已连接：${config.llm.provider}/${config.llm.model}`}
         {config && config.llm_enabled && config.llm && !config.llm.ok && ` · LLM 连接异常：${config.llm.message}`}
         {config && config.llm_enabled && !config.llm && " · LLM Key 已配置，连接状态未知"}
         {config && config.amap_web_enabled && " · 高德实时数据已启用"}

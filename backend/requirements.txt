@@ -5,5 +5,5 @@ pydantic==2.10.4
 pydantic-settings==2.7.1
 python-dotenv==1.0.1
 httpx==0.28.1
-# OpenAI-compatible SDK, used to talk to DeepSeek (base_url override).
+# OpenAI-compatible SDK, used to talk to the configured LLM provider.
 openai==1.59.6

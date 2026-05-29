@@ -28,7 +28,7 @@ def _strip_code_fence(text: str) -> str:
     return cleaned.strip()
 
 
-class DeepSeekClient:
+class OpenAICompatibleLLMClient:
     def __init__(self) -> None:
         settings = get_settings()
         self._settings = settings
@@ -38,8 +38,8 @@ class DeepSeekClient:
             from openai import AsyncOpenAI
 
             self._client = AsyncOpenAI(
-                api_key=settings.deepseek_api_key,
-                base_url=settings.deepseek_base_url,
+                api_key=settings.effective_llm_api_key,
+                base_url=settings.effective_llm_base_url,
                 timeout=settings.llm_timeout_s,
                 max_retries=settings.llm_max_retries,
             )
@@ -51,15 +51,17 @@ class DeepSeekClient:
     async def check_health(self) -> dict:
         """Tiny live probe used by /api/config so the UI can distinguish
         "key present" from "the model endpoint actually works"."""
-        model = self._settings.deepseek_model
-        base_url = self._settings.deepseek_base_url
+        model = self._settings.effective_llm_model
+        base_url = self._settings.effective_llm_base_url
+        provider = self._settings.effective_llm_provider
         if self._client is None:
             return {
                 "configured": False,
                 "ok": False,
+                "provider": provider,
                 "model": model,
                 "base_url": base_url,
-                "message": "未配置 DeepSeek API Key",
+                "message": "未配置 LLM API Key",
             }
         try:
             resp = await self._client.chat.completions.create(
@@ -84,6 +86,7 @@ class DeepSeekClient:
             return {
                 "configured": True,
                 "ok": ok,
+                "provider": provider,
                 "model": model,
                 "base_url": base_url,
                 "message": "LLM 连接正常" if ok else f"模型响应异常：{raw[:120]}",
@@ -92,6 +95,7 @@ class DeepSeekClient:
             return {
                 "configured": True,
                 "ok": False,
+                "provider": provider,
                 "model": model,
                 "base_url": base_url,
                 "message": f"{type(exc).__name__}: {str(exc)[:180]}",
@@ -108,7 +112,7 @@ class DeepSeekClient:
             {"role": "user", "content": user},
         ]
         resp = await self._client.chat.completions.create(
-            model=self._settings.deepseek_model,
+            model=self._settings.effective_llm_model,
             messages=messages,
             temperature=temp,
             response_format={"type": "json_object"},
@@ -123,7 +127,7 @@ class DeepSeekClient:
                 {"role": "user", "content": "上面的输出不是合法 JSON，请只重新输出合法 JSON。"}
             )
             resp = await self._client.chat.completions.create(
-                model=self._settings.deepseek_model,
+                model=self._settings.effective_llm_model,
                 messages=messages,
                 temperature=temp,
                 response_format={"type": "json_object"},
@@ -136,7 +140,7 @@ class DeepSeekClient:
         assert self._client is not None
         temp = self._settings.llm_temperature_warm if temperature is None else temperature
         resp = await self._client.chat.completions.create(
-            model=self._settings.deepseek_model,
+            model=self._settings.effective_llm_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -151,7 +155,7 @@ class DeepSeekClient:
         assert self._client is not None
         temp = self._settings.llm_temperature_warm if temperature is None else temperature
         stream = await self._client.chat.completions.create(
-            model=self._settings.deepseek_model,
+            model=self._settings.effective_llm_model,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -166,5 +170,5 @@ class DeepSeekClient:
 
 
 @lru_cache
-def get_llm() -> DeepSeekClient:
-    return DeepSeekClient()
+def get_llm() -> OpenAICompatibleLLMClient:
+    return OpenAICompatibleLLMClient()

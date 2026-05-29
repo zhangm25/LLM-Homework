@@ -28,7 +28,15 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    # --- DeepSeek (OpenAI-compatible) -------------------------------------
+    # --- LLM (OpenAI-compatible) ------------------------------------------
+    # Prefer the generic LLM_* variables. The older DEEPSEEK_* variables are
+    # kept as a compatibility fallback so existing local .env files still work.
+    llm_provider: str = "deepseek"
+    llm_api_key: str = ""
+    llm_base_url: str = ""
+    llm_model: str = ""
+
+    # --- Legacy DeepSeek names (fallback only) -----------------------------
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
     # `deepseek-chat` maps to DeepSeek-V4-Flash today; switch to
@@ -56,7 +64,31 @@ class Settings(BaseSettings):
 
     @property
     def llm_enabled(self) -> bool:
-        return bool(self.deepseek_api_key)
+        return bool(self.effective_llm_api_key)
+
+    @property
+    def effective_llm_provider(self) -> str:
+        return (self.llm_provider or "deepseek").strip().lower()
+
+    @property
+    def effective_llm_api_key(self) -> str:
+        return self.llm_api_key or self.deepseek_api_key
+
+    @property
+    def effective_llm_base_url(self) -> str:
+        if self.llm_base_url:
+            return self.llm_base_url
+        if self.effective_llm_provider == "zhipu":
+            return "https://open.bigmodel.cn/api/paas/v4"
+        return self.deepseek_base_url
+
+    @property
+    def effective_llm_model(self) -> str:
+        if self.llm_model:
+            return self.llm_model
+        if self.effective_llm_provider == "zhipu":
+            return "glm-4-flash-250414"
+        return self.deepseek_model
 
     @property
     def amap_enabled(self) -> bool:

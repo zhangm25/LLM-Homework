@@ -119,6 +119,7 @@ export interface AppConfig {
   llm?: {
     configured: boolean;
     ok: boolean;
+    provider: string;
     model: string;
     base_url: string;
     message: string;

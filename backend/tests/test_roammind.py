@@ -15,6 +15,7 @@ import sys
 from pathlib import Path
 
 # Force the keyless (heuristic) path for pipeline tests; AMap is faked per-test.
+os.environ["LLM_API_KEY"] = ""
 os.environ["DEEPSEEK_API_KEY"] = ""
 os.environ["AMAP_WEB_SERVICE_KEY"] = ""
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # .../backend

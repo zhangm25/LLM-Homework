@@ -3,7 +3,7 @@ import react from "@vitejs/plugin-react";
 
 // `envDir: ".."` is resolved relative to the project root (this folder), i.e.
 // the repo root — so the single root `.env` is the only place keys live. Vite
-// only exposes `VITE_*` vars to the client, so the DeepSeek / AMap web-service
+// only exposes `VITE_*` vars to the client, so the LLM / AMap web-service
 // keys in that same file stay server-side.
 export default defineConfig({
   plugins: [react()],
