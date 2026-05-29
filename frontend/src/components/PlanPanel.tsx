@@ -2,7 +2,7 @@ import type { Plan, POIChoice } from "../types";
 import MapView from "./MapView";
 import Timeline from "./Timeline";
 import NavButton from "./NavButton";
-import { downloadItineraryHtml } from "../lib/exportItinerary";
+import { downloadItineraryHtml, openItineraryHtml } from "../lib/exportItinerary";
 
 export default function PlanPanel({
   plan,
@@ -55,10 +55,16 @@ export default function PlanPanel({
             onSwap={onSwap}
             swappingIndex={swappingIndex}
           />
-          <button className="export-btn" type="button" onClick={() => downloadItineraryHtml(plan)}>
-            导出移动端行程网页
-            <small>HTML 文件，含时间轴与分段导航</small>
-          </button>
+          <div className="export-actions">
+            <button className="export-btn" type="button" onClick={() => downloadItineraryHtml(plan)}>
+              保存行程网页
+              <small>下载 HTML 文件</small>
+            </button>
+            <button className="export-btn" type="button" onClick={() => openItineraryHtml(plan)}>
+              预览行程网页
+              <small>新标签打开</small>
+            </button>
+          </div>
           <NavButton plan={plan} />
         </>
       ) : (

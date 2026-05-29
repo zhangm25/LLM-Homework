@@ -27,17 +27,27 @@ function amapMarkerLink(stop: Stop): string | null {
   return `https://uri.amap.com/marker?position=${lng},${lat}&name=${encodeURIComponent(stop.name)}`;
 }
 
-function navLinkForStop(plan: Plan, stopIndex: number): string | null {
-  const segmentIndex = plan.summary.segments.findIndex((s) => s.to_index === stopIndex);
-  if (segmentIndex < 0) return null;
-  return plan.nav.segment_web_uris[segmentIndex] ?? null;
-}
-
 function stopType(stop: Stop): string {
   if (stop.kind === "start") return "起点";
   if (stop.kind === "end") return "终点";
   if (stop.kind === "fixed") return "固定日程";
   return "行程地点";
+}
+
+function absoluteName(stop: Stop): string {
+  if (stop.kind !== "start") return stop.name;
+  if (stop.name !== "从当前位置出发") return stop.name;
+  if (stop.open_info && !stop.open_info.includes("当前位置")) return stop.open_info.replace(/^📍\s*/, "");
+  if (stop.location) return `生成时记录的起点（${stop.location[1].toFixed(5)}, ${stop.location[0].toFixed(5)}）`;
+  return "生成时记录的起点";
+}
+
+function cleanRelativeText(text: string | null): string | null {
+  if (!text) return null;
+  return text
+    .replaceAll("当前位置", "生成时记录的起点")
+    .replaceAll("现在", "生成时")
+    .replaceAll("今日", "本次行程");
 }
 
 function stopMeta(stop: Stop): string[] {
@@ -53,8 +63,10 @@ function renderStops(plan: Plan): string {
   return plan.timeline
     .map((stop, index) => {
       const mapLink = amapMarkerLink(stop);
-      const navLink = navLinkForStop(plan, index);
       const meta = stopMeta(stop);
+      const displayName = absoluteName(stop);
+      const why = cleanRelativeText(stop.why);
+      const leg = cleanRelativeText(stop.leg);
       return `
         <article class="stop ${esc(stop.kind)}">
           <div class="rail">
@@ -66,12 +78,11 @@ function renderStops(plan: Plan): string {
               <span class="time">${esc(stop.time || "未定")}</span>
               <span class="kind">${esc(stopType(stop))}</span>
             </div>
-            <h2>${esc(stop.name)}</h2>
+            <h2>${esc(displayName)}</h2>
             ${meta.length ? `<div class="chips">${meta.map((m) => `<span>${esc(m)}</span>`).join("")}</div>` : ""}
-            ${stop.why ? `<p class="why">${esc(stop.why)}</p>` : ""}
-            ${stop.leg ? `<p class="leg">${esc(stop.leg)}</p>` : ""}
+            ${why ? `<p class="why">${esc(why)}</p>` : ""}
+            ${leg ? `<p class="leg">${esc(leg)}</p>` : ""}
             <div class="actions">
-              ${navLink ? `<a href="${attr(navLink)}" target="_blank" rel="noopener">导航到这里</a>` : ""}
               ${mapLink ? `<a href="${attr(mapLink)}" target="_blank" rel="noopener">查看地点</a>` : ""}
             </div>
           </div>
@@ -96,7 +107,7 @@ function renderSegments(plan: Plan): string {
                   <strong>${esc(seg.from_name)} → ${esc(seg.to_name)}</strong>
                   <span>${esc(seg.mode === "walking" ? "步行" : seg.mode === "driving" ? "驾车" : seg.mode === "transit" ? "公交" : "自动")}</span>
                 </div>
-                ${uri ? `<a href="${attr(uri)}" target="_blank" rel="noopener">打开高德</a>` : ""}
+                ${uri ? `<a href="${attr(uri)}" target="_blank" rel="noopener">从上一站出发</a>` : ""}
               </div>
             `;
           })
@@ -109,6 +120,10 @@ function renderSegments(plan: Plan): string {
 export function itineraryHtml(plan: Plan): string {
   const generatedAt = new Date().toLocaleString("zh-CN", { hour12: false });
   const fullRoute = plan.nav.web_uri;
+  const firstStop = plan.timeline[0];
+  const startNote = firstStop
+    ? `起点：${absoluteName(firstStop)}。时间为本次生成行程时计算的计划时间，不代表打开文件时的实时位置或时刻。`
+    : "时间为本次生成行程时计算的计划时间，不代表打开文件时的实时位置或时刻。";
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -128,6 +143,7 @@ export function itineraryHtml(plan: Plan): string {
     .metric small{display:block;color:var(--muted);font-size:11px}
     .metric b{display:block;font-size:16px;margin-top:2px}
     .note{background:#eef5f0;border:1px solid #d8e5dd;color:#365c4e;border-radius:12px;padding:11px 12px;font-size:13px}
+    .context{margin:10px 0 0;color:var(--muted);font-size:12px}
     .route-action{display:flex;gap:8px;margin-top:12px}
     a{color:var(--accent);text-decoration:none}
     .route-action a,.actions a,.segment a{display:inline-flex;align-items:center;justify-content:center;border:1px solid #efd5c8;background:#fff6f1;color:#a84f30;border-radius:10px;padding:9px 11px;font-size:13px;font-weight:650}
@@ -171,12 +187,13 @@ export function itineraryHtml(plan: Plan): string {
       <div class="brand">RoamMind 行程单</div>
       <h1>${esc(plan.city)}行程</h1>
       <p class="note">${esc(plan.feasibility.note)}</p>
+      <p class="context">${esc(startNote)}</p>
       <div class="summary">
         <div class="metric"><small>总距离</small><b>${esc(plan.summary.total_distance_text)}</b></div>
         <div class="metric"><small>路上时间</small><b>${esc(plan.summary.total_duration_text)}</b></div>
         <div class="metric"><small>地点数</small><b>${esc(plan.summary.stop_count)} 站</b></div>
       </div>
-      ${fullRoute ? `<div class="route-action"><a href="${attr(fullRoute)}" target="_blank" rel="noopener">打开整条高德路线</a></div>` : ""}
+      ${fullRoute ? `<div class="route-action"><a href="${attr(fullRoute)}" target="_blank" rel="noopener">按完整行程打开高德路线</a></div>` : ""}
     </header>
 
     <section class="section">
@@ -192,10 +209,14 @@ export function itineraryHtml(plan: Plan): string {
 </html>`;
 }
 
-export function downloadItineraryHtml(plan: Plan): void {
+function itineraryBlobUrl(plan: Plan): string {
   const html = itineraryHtml(plan);
   const blob = new Blob([html], { type: "text/html;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
+  return URL.createObjectURL(blob);
+}
+
+export function downloadItineraryHtml(plan: Plan): void {
+  const url = itineraryBlobUrl(plan);
   const a = document.createElement("a");
   const date = new Date().toISOString().slice(0, 10);
   a.href = url;
@@ -204,4 +225,10 @@ export function downloadItineraryHtml(plan: Plan): void {
   a.click();
   a.remove();
   window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function openItineraryHtml(plan: Plan): void {
+  const url = itineraryBlobUrl(plan);
+  window.open(url, "_blank", "noopener");
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
