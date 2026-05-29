@@ -506,6 +506,14 @@ async def _resolve_stop(
     city: str, marker: str, amap_on: bool,
 ) -> tuple[Stop, int]:
     """Ground one (place, task) target into a real Stop plus its dwell minutes."""
+    if task and task.location:
+        label = task.at or place or task.intent or "地点"
+        dwell = task.dwell_min
+        why = f"已在地点确定阶段选定「{label}」，这里直接用于排程和路线计算。"
+        return Stop(
+            kind="poi", marker=marker, time="", name=label, tags=[],
+            location=task.location, why=why, dwell_min=dwell,
+        ), dwell
     category = _venue_category(task)
     if place and category and not _place_should_be_main_destination(place):  # venue inside a named area
         cands = await _resolve_in_area(place, category, city)
@@ -586,7 +594,7 @@ async def build_plan(
             fe = None
         fixed_stops.append((
             Stop(kind="fixed", marker="🔒", time="", name=f"{ev.place} · {ev.title}",
-                 tags=["固定日程"], location=await _geocode(ev.place, city),
+                 tags=["固定日程"], location=ev.location or await _geocode(ev.place, city),
                  why="你定好的硬约束，整条行程围绕它排。"),
             {"start": fs, "end": fe},
         ))
@@ -636,7 +644,7 @@ async def build_plan(
         if end and end.value:
             items.append((
                 Stop(kind="end", marker="🏠", time="", name=f"回 {end.value}",
-                     location=await _geocode(end.value, city), why="顺路到终点，结束今天的行程。"),
+                     location=end.location or await _geocode(end.value, city), why="顺路到终点，结束今天的行程。"),
                 0, None, _extract_hhmm(intent.constraints.time_window.end),
             ))
     else:
@@ -654,7 +662,7 @@ async def build_plan(
         if end and end.value:
             items.append((
                 Stop(kind="end", marker="🏠", time="", name=f"回 {end.value}",
-                     location=await _geocode(end.value, city), why="顺路到终点，结束今天的行程。"),
+                     location=end.location or await _geocode(end.value, city), why="顺路到终点，结束今天的行程。"),
                 0, None, _extract_hhmm(intent.constraints.time_window.end),
             ))
 

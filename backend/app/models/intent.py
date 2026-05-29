@@ -44,6 +44,8 @@ class ExplicitPOI(BaseModel):
     name: str
     category: Optional[str] = None
     fixed_order_index: Optional[int] = None
+    location: Optional[list[float]] = None  # [lng, lat], filled by place resolution
+    address: Optional[str] = None
 
 
 class ImplicitPreferences(BaseModel):
@@ -90,6 +92,8 @@ class Task(BaseModel):
     needs_poi: bool = True
     time_hint: Optional[str] = None  # e.g. ">=11:00", "~黄昏"
     at: Optional[str] = None  # named place for non-POI tasks
+    location: Optional[list[float]] = None  # [lng, lat], filled by place resolution
+    address: Optional[str] = None
     explicit: bool = False
     confidence: Optional[float] = None
 

@@ -49,6 +49,7 @@ from ..models.plan import ChatRequest, ClarifyOption, Plan, StreamEvent, Underst
 from ..mock.demo_data import get_demo
 from ..planner.scheduler import build_plan, build_understanding, _resolve_named
 from .heuristics import augment_intent, extract_intent_heuristic
+from .place_resolution import resolve_place_slots
 from .place_norm import normalize_place_name
 
 STREAM_DELAY = 0.02  # pacing for non-LLM narration, gives a "typing" feel
@@ -1164,6 +1165,8 @@ async def plan_stream(req: ChatRequest) -> AsyncIterator[StreamEvent]:
         yield _ev(type="thinking", text="正在用高德检索真实地点…")
         city = intent.constraints.city or req.city or settings.default_city
         origin = [req.origin.lng, req.origin.lat] if req.origin else None
+        place_resolution = await resolve_place_slots(intent, origin, city)
+        _debug_state("plan_stream:place_resolution", city=city, origin=origin, resolution=place_resolution, intent=intent)
         _debug_state("plan_stream:build_plan", city=city, origin=origin, intent=intent)
         plan = await build_plan(intent, origin, city)
         yield _ev(type="thinking", text="已拿到候选地点，正在计算分段路程和停留时间…")

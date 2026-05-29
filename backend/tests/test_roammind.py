@@ -36,6 +36,7 @@ from app.agent.pipeline import (  # noqa: E402
     plan_stream, _is_plannable, _not_plannable_question, _merge_patch, _anchor_count,
     _extract_intent, _complete_pending_intent_llm, _apply_origin_to_start,
 )
+from app.agent.place_resolution import resolve_place_slots  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -726,6 +727,45 @@ async def check_geolocated_school_start_does_not_clarify():
     assert "plan" in types and "clarify" not in types, types
 
 
+async def check_place_resolution_fills_vague_task_before_planning():
+    use_fake({
+        "咖啡馆": [
+            _poi("静静咖啡", [116.401, 39.900], "餐饮服务;咖啡厅", rating=4.8, address="安静路1号"),
+            _poi("热闹咖啡", [116.402, 39.900], "餐饮服务;咖啡厅", rating=4.1),
+        ]
+    })
+    intent = IntentObject(
+        constraints=Constraints(
+            start=Endpoint(type="current", value="当前位置", location=[116.40, 39.90], source="geolocation")
+        ),
+        tasks=[Task(id="t1", type="leisure", intent="咖啡馆", dwell_min=45, explicit=False)],
+    )
+    resolution = await resolve_place_slots(intent, [116.40, 39.90], "北京")
+    assert resolution.status == "places_ready"
+    assert intent.tasks[0].at == "静静咖啡"
+    assert intent.tasks[0].location == [116.401, 39.9]
+
+    plan = await build_plan(intent, [116.40, 39.90], "北京")
+    assert any(s.name == "静静咖啡" for s in plan.timeline)
+
+
+async def check_place_resolution_preserves_precise_current_start():
+    use_fake()
+    full = "北京市海淀区清华园清华大学清华大学附属中学"
+    intent = IntentObject(
+        constraints=Constraints(
+            start=Endpoint(type="current", value=full, location=[116.326, 40.004], source="geolocation")
+        ),
+        tasks=[Task(id="t1", type="dining", intent="午饭", dwell_min=50)],
+    )
+    resolution = await resolve_place_slots(intent, [116.326, 40.004], "北京")
+    start = resolution.slots[0]
+    assert start.role == "start"
+    assert start.selected and start.selected.name == full
+    assert intent.constraints.start.value == full
+    assert intent.constraints.start.location == [116.326, 40.004]
+
+
 # --------------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------------
@@ -751,6 +791,8 @@ CHECKS = [
     check_origin_label_preserves_full_start_address,
     check_school_endpoint_choice_clarify, check_school_start_choice_clarify,
     check_geolocated_school_start_does_not_clarify,
+    check_place_resolution_fills_vague_task_before_planning,
+    check_place_resolution_preserves_precise_current_start,
 ]
 
 
