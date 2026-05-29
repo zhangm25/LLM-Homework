@@ -16,6 +16,7 @@ from fastapi.staticfiles import StaticFiles
 
 from .agent.pipeline import plan_stream
 from .config import PROJECT_ROOT, get_settings
+from .llm.client import get_llm
 from .mock.demo_data import SCENARIO_KEYWORDS
 from .models.plan import ChatRequest, Plan, RouteSwapRequest
 from .planner.scheduler import recompute_plan
@@ -52,8 +53,10 @@ async def health() -> dict:
 @app.get("/api/config")
 async def config() -> dict:
     """Lets the frontend show honest capability badges (mock vs live)."""
+    llm_health = await get_llm().check_health()
     return {
         "llm_enabled": settings.llm_enabled,
+        "llm": llm_health,
         "amap_web_enabled": settings.amap_enabled,
         "default_city": settings.default_city,
         "scenarios": list(SCENARIO_KEYWORDS.keys()),

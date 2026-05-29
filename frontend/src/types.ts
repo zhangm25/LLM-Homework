@@ -116,6 +116,13 @@ export interface ChatRequestBody {
 
 export interface AppConfig {
   llm_enabled: boolean;
+  llm?: {
+    configured: boolean;
+    ok: boolean;
+    model: string;
+    base_url: string;
+    message: string;
+  };
   amap_web_enabled: boolean;
   default_city: string;
   scenarios: string[];

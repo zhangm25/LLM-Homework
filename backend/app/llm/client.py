@@ -48,6 +48,55 @@ class DeepSeekClient:
     def enabled(self) -> bool:
         return self._client is not None
 
+    async def check_health(self) -> dict:
+        """Tiny live probe used by /api/config so the UI can distinguish
+        "key present" from "the model endpoint actually works"."""
+        model = self._settings.deepseek_model
+        base_url = self._settings.deepseek_base_url
+        if self._client is None:
+            return {
+                "configured": False,
+                "ok": False,
+                "model": model,
+                "base_url": base_url,
+                "message": "未配置 DeepSeek API Key",
+            }
+        try:
+            resp = await self._client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "你是连通性检查。只输出 JSON。",
+                    },
+                    {
+                        "role": "user",
+                        "content": '请只输出 {"ok": true}',
+                    },
+                ],
+                temperature=0,
+                max_tokens=20,
+                response_format={"type": "json_object"},
+            )
+            raw = resp.choices[0].message.content or "{}"
+            data = json.loads(_strip_code_fence(raw))
+            ok = bool(data.get("ok"))
+            return {
+                "configured": True,
+                "ok": ok,
+                "model": model,
+                "base_url": base_url,
+                "message": "LLM 连接正常" if ok else f"模型响应异常：{raw[:120]}",
+            }
+        except Exception as exc:
+            return {
+                "configured": True,
+                "ok": False,
+                "model": model,
+                "base_url": base_url,
+                "message": f"{type(exc).__name__}: {str(exc)[:180]}",
+            }
+
     async def complete_json(
         self, system: str, user: str, temperature: Optional[float] = None
     ) -> dict:
