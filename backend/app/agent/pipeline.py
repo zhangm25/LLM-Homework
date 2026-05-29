@@ -1169,6 +1169,7 @@ async def plan_stream(req: ChatRequest) -> AsyncIterator[StreamEvent]:
         _debug_state("plan_stream:place_resolution", city=city, origin=origin, resolution=place_resolution, intent=intent)
         _debug_state("plan_stream:build_plan", city=city, origin=origin, intent=intent)
         plan = await build_plan(intent, origin, city)
+        plan.place_resolution = place_resolution
         yield _ev(type="thinking", text="已拿到候选地点，正在计算分段路程和停留时间…")
         await asyncio.sleep(0.15)
         yield _ev(type="thinking", text="路线和时间轴已生成，正在绘制地图…")

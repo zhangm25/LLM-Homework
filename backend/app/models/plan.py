@@ -12,6 +12,7 @@ from typing import Literal, Optional
 from pydantic import BaseModel, Field
 
 from .intent import IntentObject
+from .place import PlaceResolution
 
 Role = Literal["user", "assistant"]
 
@@ -154,6 +155,8 @@ class Plan(BaseModel):
     feasibility: Feasibility = Field(default_factory=Feasibility)
     # Echoed back so the client can send it on the next (replanning) turn.
     intent: Optional[IntentObject] = None
+    # Place-first resolution result: slots, map candidates, and selected places.
+    place_resolution: Optional[PlaceResolution] = None
     source: Literal["mock", "live"] = "mock"
 
 

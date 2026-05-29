@@ -81,7 +81,39 @@ export interface Plan {
   nav: NavLinks;
   feasibility: Feasibility;
   intent?: unknown | null;
+  place_resolution?: PlaceResolution | null;
   source: "mock" | "live";
+}
+
+export interface PlaceCandidate {
+  id: string;
+  name: string;
+  address: string;
+  location: [number, number];
+  rating: number | null;
+  cost: string | null;
+  distance_m: number | null;
+  type: string;
+}
+
+export interface PlaceSlot {
+  id: string;
+  role: "start" | "end" | "fixed" | "waypoint" | "activity_poi";
+  source_text: string;
+  query: string;
+  city: string;
+  anchor_label: string | null;
+  anchor_location: [number, number] | null;
+  status: "selected" | "candidates_ready" | "unresolved" | "skipped";
+  candidates: PlaceCandidate[];
+  selected: PlaceCandidate | null;
+  needs_user_choice: boolean;
+  reason: string;
+}
+
+export interface PlaceResolution {
+  status: "places_ready" | "partial" | "unresolved";
+  slots: PlaceSlot[];
 }
 
 export interface ClarifyOption {
