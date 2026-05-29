@@ -21,6 +21,18 @@ function slug(value: string): string {
   return clean || "RoamMind";
 }
 
+function pad(value: number): string {
+  return String(value).padStart(2, "0");
+}
+
+function formatExportTimestamp(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function exportDate(date: Date): string {
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
 function amapMarkerLink(stop: Stop): string | null {
   if (!stop.location) return null;
   const [lng, lat] = stop.location;
@@ -50,6 +62,19 @@ function cleanRelativeText(text: string | null): string | null {
     .replaceAll("今日", "本次行程");
 }
 
+function displayTime(time: string | null, generatedAt: Date): string {
+  const text = (time || "").trim();
+  if (!text) return "未定";
+  if (/^(现在|当前|立刻|马上|now)$/i.test(text)) {
+    return `生成时 ${formatExportTimestamp(generatedAt)}`;
+  }
+  return text
+    .replaceAll("现在", formatExportTimestamp(generatedAt))
+    .replaceAll("当前", formatExportTimestamp(generatedAt))
+    .replaceAll("今天", exportDate(generatedAt))
+    .replaceAll("今日", exportDate(generatedAt));
+}
+
 function stopMeta(stop: Stop): string[] {
   const out = [...(stop.tags ?? [])];
   if (stop.rating != null) out.push(`评分 ${stop.rating}`);
@@ -59,7 +84,7 @@ function stopMeta(stop: Stop): string[] {
   return out;
 }
 
-function renderStops(plan: Plan): string {
+function renderStops(plan: Plan, generatedAt: Date): string {
   return plan.timeline
     .map((stop, index) => {
       const mapLink = amapMarkerLink(stop);
@@ -75,7 +100,7 @@ function renderStops(plan: Plan): string {
           </div>
           <div class="card">
             <div class="topline">
-              <span class="time">${esc(stop.time || "未定")}</span>
+              <span class="time">${esc(displayTime(stop.time, generatedAt))}</span>
               <span class="kind">${esc(stopType(stop))}</span>
             </div>
             <h2>${esc(displayName)}</h2>
@@ -118,12 +143,13 @@ function renderSegments(plan: Plan): string {
 }
 
 export function itineraryHtml(plan: Plan): string {
-  const generatedAt = new Date().toLocaleString("zh-CN", { hour12: false });
+  const generatedAtDate = new Date();
+  const generatedAt = formatExportTimestamp(generatedAtDate);
   const fullRoute = plan.nav.web_uri;
   const firstStop = plan.timeline[0];
   const startNote = firstStop
-    ? `起点：${absoluteName(firstStop)}。时间为本次生成行程时计算的计划时间，不代表打开文件时的实时位置或时刻。`
-    : "时间为本次生成行程时计算的计划时间，不代表打开文件时的实时位置或时刻。";
+    ? `起点：${absoluteName(firstStop)}。本行程单生成于 ${generatedAt}，所有“当前/现在”类时间已按生成时刻固化，不代表打开文件时的实时位置或时刻。`
+    : `本行程单生成于 ${generatedAt}，所有“当前/现在”类时间已按生成时刻固化，不代表打开文件时的实时位置或时刻。`;
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -198,7 +224,7 @@ export function itineraryHtml(plan: Plan): string {
 
     <section class="section">
       <h2 class="section-title">时间行程</h2>
-      <div class="timeline">${renderStops(plan)}</div>
+      <div class="timeline">${renderStops(plan, generatedAtDate)}</div>
     </section>
 
     ${renderSegments(plan)}
