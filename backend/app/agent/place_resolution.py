@@ -8,6 +8,7 @@ IntentObject so the current scheduler can keep doing time/route planning.
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from typing import Optional
 
 from ..debug_log import write_debug_log
@@ -18,12 +19,15 @@ from ..planner.scheduler import (
     CITY_CENTER,
     DEFAULT_CITY,
     _clean_intent,
+    _extract_hhmm,
     _grounding_targets,
+    _parse_clock,
     _place_should_be_main_destination,
     _resolve_in_area,
     _resolve_named,
     _resolve_near,
     _resolve_near_anchors,
+    _task_likely_between_fixed,
     _venue_category,
 )
 from ..tools.amap_client import POI
@@ -143,30 +147,80 @@ def _is_route_anchored_activity(task: Optional[Task], category: Optional[str]) -
     return task.type == "dining" or any(token in text for token in ("吃", "饭", "餐", "咖啡", "茶", "brunch"))
 
 
-async def _next_anchor_location(
-    targets: list[tuple[Optional[str], Optional[Task]]],
+Target = tuple[Optional[str], Optional[Task]]
+ContextKey = tuple[str, int]
+
+
+def _fixed_meta(ev) -> dict:
+    base = datetime.now()
+    fs = _parse_clock(_extract_hhmm(ev.start), base) if _extract_hhmm(ev.start) else None
+    fe = _parse_clock(_extract_hhmm(ev.end), base) if _extract_hhmm(ev.end) else None
+    if fs and fe and fe <= fs:
+        fe = None
+    return {"start": fs, "end": fe}
+
+
+def _fixed_anchors(intent: IntentObject) -> list[dict]:
+    out = []
+    for ev in sorted(intent.fixed_events, key=lambda e: _extract_hhmm(e.start) or "99:99"):
+        if ev.location:
+            out.append({"label": ev.place, "location": ev.location, "meta": _fixed_meta(ev)})
+    return out
+
+
+def _target_context(task: Optional[Task], fixed: list[dict]) -> ContextKey:
+    if not fixed:
+        return ("free", 0)
+    for i in range(1, len(fixed)):
+        if _task_likely_between_fixed(task, fixed[i - 1]["meta"], fixed[i]["meta"]):
+            return ("between", i)
+    return ("after_fixed", 0)
+
+
+def _context_start_location(context: ContextKey, fixed: list[dict], default_start: list[float]) -> list[float]:
+    kind, index = context
+    if kind == "between":
+        return fixed[index - 1]["location"]
+    if kind == "after_fixed" and fixed:
+        return fixed[-1]["location"]
+    return default_start
+
+
+def _context_end_location(context: ContextKey, fixed: list[dict], end_loc: Optional[list[float]]) -> Optional[list[float]]:
+    kind, index = context
+    if kind == "between":
+        return fixed[index]["location"]
+    return end_loc
+
+
+async def _resolve_named_cached(place: str, city: str, cache: dict[str, list[POI]]) -> list[POI]:
+    if place not in cache:
+        cache[place] = await _resolve_named(place, city)
+    return cache[place]
+
+
+async def _lookahead_anchor(
+    targets: list[Target],
+    contexts: list[ContextKey],
     start_index: int,
-    intent: IntentObject,
+    context: ContextKey,
     city: str,
+    boundary: Optional[list[float]],
+    named_cache: dict[str, list[POI]],
 ) -> Optional[list[float]]:
-    for place, task in targets[start_index + 1:]:
+    has_future_same_context = False
+    for future_i in range(start_index + 1, len(targets)):
+        if contexts[future_i] != context:
+            continue
+        has_future_same_context = True
+        place, task = targets[future_i]
         if task and task.location:
             return task.location
         if place:
-            cands = await _resolve_named(place, city)
+            cands = await _resolve_named_cached(place, city, named_cache)
             if cands:
                 return cands[0].location
-    for ev in sorted(intent.fixed_events, key=lambda e: e.start):
-        if ev.location:
-            return ev.location
-    end = intent.constraints.end
-    if end and end.location:
-        return end.location
-    if end and end.value:
-        cands = await _resolve_named(end.value, city)
-        if cands:
-            return cands[0].location
-    return None
+    return None if has_future_same_context else boundary
 
 
 def _target_debug(place: Optional[str], task: Optional[Task]) -> dict:
@@ -258,17 +312,26 @@ async def resolve_place_slots(
             ev.location = slot.selected.location
         slots.append(slot)
 
-    prev_loc = start.location or origin or CITY_CENTER.get(city, CITY_CENTER[DEFAULT_CITY])
+    start_loc = start.location or origin or CITY_CENTER.get(city, CITY_CENTER[DEFAULT_CITY])
+    fixed = _fixed_anchors(intent)
+    end_loc = intent.constraints.end.location if intent.constraints.end and intent.constraints.end.location else None
     targets = _grounding_targets(intent)
+    target_contexts = [_target_context(task, fixed) for _, task in targets]
+    context_prev: dict[ContextKey, list[float]] = {}
+    named_cache: dict[str, list[POI]] = {}
     _log_place_resolution(
         "start",
         city=city,
         origin=origin,
-        initial_prev_loc=prev_loc,
-        targets=[_target_debug(place, task) for place, task in targets],
+        initial_start_loc=start_loc,
+        fixed_anchors=fixed,
+        end_location=end_loc,
+        targets=[{**_target_debug(place, task), "context": target_contexts[i]} for i, (place, task) in enumerate(targets)],
     )
     for target_i, (place, task) in enumerate(targets):
         category = _venue_category(task)
+        context = target_contexts[target_i]
+        prev_loc = context_prev.get(context) or _context_start_location(context, fixed, start_loc)
         if place and category and not _place_should_be_main_destination(place):
             strategy = "area_around_search_first"
             raw = await _resolve_in_area(place, category, city)
@@ -278,7 +341,7 @@ async def resolve_place_slots(
             anchor_note = f"先定位区域「{place}」，再在区域周边搜索「{category}」；无结果才退回文本搜索。"
         elif place:
             strategy = "named_text_search"
-            raw = await _resolve_named(place, city)
+            raw = await _resolve_named_cached(place, city, named_cache)
             query = place
             role = "waypoint"
             anchors = []
@@ -290,10 +353,18 @@ async def resolve_place_slots(
                 or TASK_DEFAULT_KEYWORD.get(task.type if task else "other", "地点")
             )
             if _is_route_anchored_activity(task, category):
-                next_loc = await _next_anchor_location(targets, target_i, intent, city)
+                next_loc = await _lookahead_anchor(
+                    targets,
+                    target_contexts,
+                    target_i,
+                    context,
+                    city,
+                    _context_end_location(context, fixed, end_loc),
+                    named_cache,
+                )
                 anchors = _unique_anchors(prev_loc, next_loc)
                 strategy = "route_anchor_around_search"
-                anchor_note = "餐饮/咖啡/茶等路线型模糊任务，强制围绕上一站和下一站锚点周边搜索。"
+                anchor_note = "餐饮/咖啡/茶等路线型模糊任务，围绕同一排程上下文中的上一站和下一站锚点周边搜索。"
                 raw = await _resolve_near_anchors(query, anchors, city) if anchors else await _resolve_near(query, prev_loc, city)
             else:
                 anchors = _unique_anchors(prev_loc)
@@ -311,6 +382,7 @@ async def resolve_place_slots(
             category=category,
             city=city,
             strategy=strategy,
+            schedule_context=context,
             anchor_location=prev_loc,
             route_anchors=anchors,
             note=anchor_note,
@@ -336,7 +408,7 @@ async def resolve_place_slots(
                 explicit = _match_explicit(intent, place)
                 if explicit:
                     _apply_to_explicit(explicit, slot.selected)
-            prev_loc = slot.selected.location
+            context_prev[context] = slot.selected.location
         slots.append(slot)
         _log_place_resolution(
             "slot:selected",

@@ -798,7 +798,7 @@ async def check_dining_search_uses_previous_and_next_anchors():
         ],
     )
     await resolve_place_slots(intent, [116.3200, 40.0000], "北京")
-    dining_calls = [call for call in fake.around_calls if call[0] == "餐厅"]
+    dining_calls = [call for call in fake.around_calls if call[0] in {"餐厅", "午饭"}]
     assert any(call[1] == [116.3200, 40.0000] for call in dining_calls), dining_calls
     assert any(call[1] == [116.3373, 39.9929] for call in dining_calls), dining_calls
 
@@ -831,6 +831,63 @@ async def check_dining_inside_named_area_uses_area_around_search_first():
     await resolve_place_slots(intent, [116.3200, 40.0000], "北京")
     assert ("餐厅", [116.3373, 39.9929], 2000) in fake.around_calls, fake.around_calls
     assert "五道口 餐厅" not in fake.text_calls, fake.text_calls
+
+
+async def check_dining_between_fixed_events_uses_meeting_anchors():
+    class TrackingAMap(FakeAMap):
+        def __init__(self):
+            super().__init__()
+            self.around_calls = []
+
+        async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                    sortrule="weight", page_size=10):
+            self.around_calls.append((keywords, list(location), radius_m))
+            return [_poi(f"{keywords}@{location[0]:.3f}", [location[0] + 0.001, location[1]], rating=4.6)]
+
+    fake = TrackingAMap()
+    sch.get_amap = lambda: fake
+    intent = IntentObject(
+        constraints=Constraints(start=Endpoint(type="current", location=[116.10, 39.90], source="geolocation")),
+        fixed_events=[
+            FixedEvent(title="上午会", place="会议点A", start="10:00", end="11:30", location=[116.30, 39.90]),
+            FixedEvent(title="下午会", place="会议点B", start="14:00", end="15:00", location=[116.50, 39.90]),
+        ],
+        tasks=[Task(id="t1", type="dining", intent="午饭", dwell_min=60, time_hint="12:00")],
+    )
+    await resolve_place_slots(intent, [116.10, 39.90], "北京")
+    dining_calls = [call for call in fake.around_calls if call[0] in {"餐厅", "午饭"}]
+    assert any(call[1] == [116.30, 39.90] for call in dining_calls), dining_calls
+    assert any(call[1] == [116.50, 39.90] for call in dining_calls), dining_calls
+    assert not any(call[1] == [116.10, 39.90] for call in dining_calls), dining_calls
+
+
+async def check_dining_does_not_use_end_before_future_vague_task():
+    class TrackingAMap(FakeAMap):
+        def __init__(self):
+            super().__init__()
+            self.around_calls = []
+
+        async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                    sortrule="weight", page_size=10):
+            self.around_calls.append((keywords, list(location), radius_m))
+            return [_poi(f"{keywords}@{location[0]:.3f}", [location[0] + 0.001, location[1]], rating=4.6)]
+
+    fake = TrackingAMap()
+    sch.get_amap = lambda: fake
+    intent = IntentObject(
+        constraints=Constraints(
+            start=Endpoint(type="current", location=[116.10, 39.90], source="geolocation"),
+            end=Endpoint(type="named", value="终点", location=[116.80, 39.90], source="nl_extract"),
+        ),
+        tasks=[
+            Task(id="t1", type="dining", intent="吃饭", dwell_min=60),
+            Task(id="t2", type="leisure", intent="找个地方休息", dwell_min=60),
+        ],
+    )
+    await resolve_place_slots(intent, [116.10, 39.90], "北京")
+    dining_calls = [call for call in fake.around_calls if call[0] == "餐厅"]
+    assert any(call[1] == [116.10, 39.90] for call in dining_calls), dining_calls
+    assert not any(call[1] == [116.80, 39.90] for call in dining_calls), dining_calls
 
 
 def check_fuzzy_preference_clarify_is_nonblocking():
@@ -915,6 +972,8 @@ CHECKS = [
     check_place_resolution_preserves_precise_current_start,
     check_dining_search_uses_previous_and_next_anchors,
     check_dining_inside_named_area_uses_area_around_search_first,
+    check_dining_between_fixed_events_uses_meeting_anchors,
+    check_dining_does_not_use_end_before_future_vague_task,
     check_fuzzy_preference_clarify_is_nonblocking,
     check_file_parser_csv_itinerary,
     check_file_parser_docx_text,
