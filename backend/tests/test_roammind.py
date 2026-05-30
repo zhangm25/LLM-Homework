@@ -784,7 +784,7 @@ async def check_dining_search_uses_previous_and_next_anchors():
 
         async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
                                     sortrule="weight", page_size=10):
-            self.around_calls.append((keywords, list(location), radius_m))
+            self.around_calls.append((keywords, list(location), radius_m, types))
             return [_poi(f"{keywords}@{location[0]:.4f}", [location[0] + 0.001, location[1]], rating=4.6)]
 
     fake = TrackingAMap()
@@ -798,9 +798,10 @@ async def check_dining_search_uses_previous_and_next_anchors():
         ],
     )
     await resolve_place_slots(intent, [116.3200, 40.0000], "北京")
-    dining_calls = [call for call in fake.around_calls if call[0] in {"餐厅", "午饭"}]
+    dining_calls = [call for call in fake.around_calls if "餐厅" in call[0]]
     assert any(call[1] == [116.3200, 40.0000] for call in dining_calls), dining_calls
     assert any(call[1] == [116.3373, 39.9929] for call in dining_calls), dining_calls
+    assert all(call[3] == "050000" for call in dining_calls), dining_calls
 
 
 async def check_dining_inside_named_area_uses_area_around_search_first():
@@ -818,7 +819,7 @@ async def check_dining_inside_named_area_uses_area_around_search_first():
 
         async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
                                     sortrule="weight", page_size=10):
-            self.around_calls.append((keywords, list(location), radius_m))
+            self.around_calls.append((keywords, list(location), radius_m, types))
             return [_poi("五道口附近餐厅", [location[0] + 0.001, location[1]], rating=4.7)]
 
     fake = TrackingAMap()
@@ -829,7 +830,7 @@ async def check_dining_inside_named_area_uses_area_around_search_first():
         tasks=[Task(id="t1", type="dining", intent="吃饭", at="五道口", dwell_min=60, explicit=True)],
     )
     await resolve_place_slots(intent, [116.3200, 40.0000], "北京")
-    assert ("餐厅", [116.3373, 39.9929], 2000) in fake.around_calls, fake.around_calls
+    assert ("餐厅|饭店|中餐|快餐", [116.3373, 39.9929], 3000, "050000") in fake.around_calls, fake.around_calls
     assert "五道口 餐厅" not in fake.text_calls, fake.text_calls
 
 
@@ -841,7 +842,7 @@ async def check_dining_between_fixed_events_uses_meeting_anchors():
 
         async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
                                     sortrule="weight", page_size=10):
-            self.around_calls.append((keywords, list(location), radius_m))
+            self.around_calls.append((keywords, list(location), radius_m, types))
             return [_poi(f"{keywords}@{location[0]:.3f}", [location[0] + 0.001, location[1]], rating=4.6)]
 
     fake = TrackingAMap()
@@ -855,10 +856,39 @@ async def check_dining_between_fixed_events_uses_meeting_anchors():
         tasks=[Task(id="t1", type="dining", intent="午饭", dwell_min=60, time_hint="12:00")],
     )
     await resolve_place_slots(intent, [116.10, 39.90], "北京")
-    dining_calls = [call for call in fake.around_calls if call[0] in {"餐厅", "午饭"}]
+    dining_calls = [call for call in fake.around_calls if "餐厅" in call[0]]
     assert any(call[1] == [116.30, 39.90] for call in dining_calls), dining_calls
     assert any(call[1] == [116.50, 39.90] for call in dining_calls), dining_calls
     assert not any(call[1] == [116.10, 39.90] for call in dining_calls), dining_calls
+    assert all(call[3] == "050000" for call in dining_calls), dining_calls
+
+
+async def check_lunch_search_is_normalized_before_amap():
+    class TrackingAMap(FakeAMap):
+        def __init__(self):
+            super().__init__()
+            self.around_calls = []
+
+        async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                    sortrule="weight", page_size=10):
+            self.around_calls.append((keywords, list(location), radius_m, types))
+            if keywords == "午饭":
+                return []
+            if keywords == "餐厅|饭店|中餐|快餐" and types == "050000":
+                return [_poi("路线附近餐厅", [location[0] + 0.001, location[1]], rating=4.6)]
+            return []
+
+    fake = TrackingAMap()
+    sch.get_amap = lambda: fake
+    intent = IntentObject(
+        constraints=Constraints(start=Endpoint(type="current", location=[116.192639, 40.244939], source="geolocation")),
+        tasks=[Task(id="t1", type="dining", intent="午饭", dwell_min=60)],
+    )
+    resolution = await resolve_place_slots(intent, [116.192639, 40.244939], "北京")
+    assert resolution.status == "places_ready"
+    assert intent.tasks[0].at == "路线附近餐厅"
+    assert all(call[0] != "午饭" for call in fake.around_calls), fake.around_calls
+    assert ("餐厅|饭店|中餐|快餐", [116.192639, 40.244939], 3000, "050000") in fake.around_calls
 
 
 async def check_dining_does_not_use_end_before_future_vague_task():
@@ -869,7 +899,7 @@ async def check_dining_does_not_use_end_before_future_vague_task():
 
         async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
                                     sortrule="weight", page_size=10):
-            self.around_calls.append((keywords, list(location), radius_m))
+            self.around_calls.append((keywords, list(location), radius_m, types))
             return [_poi(f"{keywords}@{location[0]:.3f}", [location[0] + 0.001, location[1]], rating=4.6)]
 
     fake = TrackingAMap()
@@ -885,9 +915,10 @@ async def check_dining_does_not_use_end_before_future_vague_task():
         ],
     )
     await resolve_place_slots(intent, [116.10, 39.90], "北京")
-    dining_calls = [call for call in fake.around_calls if call[0] == "餐厅"]
+    dining_calls = [call for call in fake.around_calls if "餐厅" in call[0]]
     assert any(call[1] == [116.10, 39.90] for call in dining_calls), dining_calls
     assert not any(call[1] == [116.80, 39.90] for call in dining_calls), dining_calls
+    assert all(call[3] == "050000" for call in dining_calls), dining_calls
 
 
 def check_fuzzy_preference_clarify_is_nonblocking():
@@ -973,6 +1004,7 @@ CHECKS = [
     check_dining_search_uses_previous_and_next_anchors,
     check_dining_inside_named_area_uses_area_around_search_first,
     check_dining_between_fixed_events_uses_meeting_anchors,
+    check_lunch_search_is_normalized_before_amap,
     check_dining_does_not_use_end_before_future_vague_task,
     check_fuzzy_preference_clarify_is_nonblocking,
     check_file_parser_csv_itinerary,

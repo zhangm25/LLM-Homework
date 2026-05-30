@@ -384,7 +384,14 @@ def _pick_main_poi(query: str, cands: list[POI]) -> Optional[POI]:
     return no_sub[0] if no_sub else cands[0]
 
 
-async def _resolve_in_area(place: str, category: str, city: str) -> list[POI]:
+async def _resolve_in_area(
+    place: str,
+    category: str,
+    city: str,
+    types: Optional[str] = None,
+    radius_m: int = 2000,
+    fallback_query: Optional[str] = None,
+) -> list[POI]:
     """A venue (restaurant / cafe / shop) inside a named area: search the
     category in that area; best-rated first, the rest as alternatives."""
     amap = get_amap()
@@ -393,25 +400,47 @@ async def _resolve_in_area(place: str, category: str, city: str) -> list[POI]:
     cands: list[POI] = []
     area = await _geocode(place, city)
     if area:
-        cands = await amap.search_poi_around(category, area, radius_m=2000, sortrule="weight", page_size=15)
+        cands = await amap.search_poi_around(
+            category, area, radius_m=radius_m, types=types, sortrule="weight", page_size=15
+        )
     if not cands:
-        cands = await amap.search_poi_text(f"{place} {category}", region=city, page_size=15)
+        cands = await amap.search_poi_text(fallback_query or f"{place} {category}", region=city, types=types, page_size=15)
     return _rank(_dedupe_pois(cands))
 
 
-async def _resolve_near(query: str, prev_loc: list[float], city: str) -> list[POI]:
+async def _resolve_near(
+    query: str,
+    prev_loc: list[float],
+    city: str,
+    types: Optional[str] = None,
+    radius_m: int = 8000,
+    fallback_radius_m: Optional[int] = None,
+    fallback_query: Optional[str] = None,
+) -> list[POI]:
     """A vague activity with no named area: search near the previous stop,
     best-rated first; fall back to a city-wide text search."""
     amap = get_amap()
     if not amap.enabled:
         return []
-    cands = await amap.search_poi_around(query, prev_loc, radius_m=8000, sortrule="weight", page_size=15)
+    cands = await amap.search_poi_around(query, prev_loc, radius_m=radius_m, types=types, sortrule="weight", page_size=15)
+    if not cands and fallback_radius_m and fallback_radius_m > radius_m:
+        cands = await amap.search_poi_around(
+            query, prev_loc, radius_m=fallback_radius_m, types=types, sortrule="weight", page_size=15
+        )
     if not cands:
-        cands = await amap.search_poi_text(query, region=city, page_size=15)
+        cands = await amap.search_poi_text(fallback_query or query, region=city, types=types, page_size=15)
     return _rank(_dedupe_pois(cands))
 
 
-async def _resolve_near_anchors(query: str, anchors: list[list[float]], city: str) -> list[POI]:
+async def _resolve_near_anchors(
+    query: str,
+    anchors: list[list[float]],
+    city: str,
+    types: Optional[str] = None,
+    radius_m: int = 3000,
+    fallback_radius_m: Optional[int] = None,
+    fallback_query: Optional[str] = None,
+) -> list[POI]:
     """Search an activity around explicit route anchors.
 
     Dining/coffee/rest tasks should stay on-route. Search around previous and
@@ -422,9 +451,16 @@ async def _resolve_near_anchors(query: str, anchors: list[list[float]], city: st
         return []
     cands: list[POI] = []
     for anchor in anchors:
-        cands.extend(await amap.search_poi_around(query, anchor, radius_m=3000, sortrule="weight", page_size=10))
+        cands.extend(await amap.search_poi_around(query, anchor, radius_m=radius_m, types=types, sortrule="weight", page_size=10))
+    if not cands and fallback_radius_m and fallback_radius_m > radius_m:
+        for anchor in anchors:
+            cands.extend(
+                await amap.search_poi_around(
+                    query, anchor, radius_m=fallback_radius_m, types=types, sortrule="weight", page_size=10
+                )
+            )
     if not cands:
-        cands = await amap.search_poi_text(query, region=city, page_size=15)
+        cands = await amap.search_poi_text(fallback_query or query, region=city, types=types, page_size=15)
     return _rank(_dedupe_pois(cands))
 
 
