@@ -264,6 +264,26 @@ def _around_enabled(search_intent: Optional[MapSearchIntent]) -> bool:
     return bool(search_intent and search_intent.search_scope in {"around_anchor", "around_route", "in_area"})
 
 
+_VAGUE_PLACE_WORDS = ("地方", "附近", "周边", "哪里", "哪儿", "随便", "顺路")
+
+
+def _should_text_resolve_named_place(place: Optional[str]) -> bool:
+    """A named non-category place should be resolved by text/region search.
+
+    Around search is for brands, categories and vague needs. Once P1 has
+    extracted a concrete place string, constraining it to the previous/next
+    stop's radius can move the result away from the user's explicit intent.
+    """
+    text = normalize_place_name(place)
+    if not text:
+        return False
+    if any(token in text for token in _VAGUE_PLACE_WORDS):
+        return False
+    if looks_like_chain_or_category_place(text):
+        return any(token in text for token in ("(", ")", "（", "）", "路店", "街店", "号店"))
+    return True
+
+
 async def _resolve_by_search_intent(
     search_intent: MapSearchIntent,
     city: str,
@@ -428,28 +448,47 @@ async def resolve_place_slots(
             anchors = _unique_anchors(prev_loc, next_loc)
             anchors_detail = _anchor_context(prev_loc, next_loc, prev_label, "下一站")
             raw_need = f"{place} {task.intent if task else ''}".strip()
-            search_intent = await build_map_search_intent(
-                task=task,
-                raw_need=raw_need,
-                category_hint=category,
-                city=city,
-                mode="named_or_fuzzy_place",
-                anchors=anchors,
-                anchor_context=anchors_detail,
-                place=place,
-            )
-            if search_intent.search_scope == "exact_place":
+            if _should_text_resolve_named_place(place):
+                search_intent = MapSearchIntent(
+                    raw_need=raw_need,
+                    search_category="generic",
+                    search_scope="exact_place",
+                    anchor_policy="none",
+                    ranking_policy="relevance",
+                    keywords=[place],
+                    reason="backend exact named place; text search in region, no radius",
+                )
                 strategy = "named_text_search"
                 raw = await _resolve_named_cached(place, city, named_cache)
                 query = place
-                anchor_note = "明确地点，按名称检索真实 POI。"
+                anchors = []
+                anchors_detail = []
+                anchor_note = "明确地点，按名称在城市/区域内检索真实 POI，不使用上一站/下一站周边半径。"
             else:
-                query = search_intent.keyword_param or place
-                strategy = f"{search_intent.search_scope}_search"
-                raw = await _resolve_by_search_intent(search_intent, city, prev_loc, anchors)
-                anchor_note = (
-                    "地点文本被判定为品牌/品类/偏好型需求，按搜索范围策略执行，避免把它当成唯一 POI 做全城 text 命中。"
+                search_intent = await build_map_search_intent(
+                    task=task,
+                    raw_need=raw_need,
+                    category_hint=category,
+                    city=city,
+                    mode="named_or_fuzzy_place",
+                    anchors=anchors,
+                    anchor_context=anchors_detail,
+                    place=place,
                 )
+                if search_intent.search_scope == "exact_place":
+                    strategy = "named_text_search"
+                    raw = await _resolve_named_cached(place, city, named_cache)
+                    query = place
+                    anchors = []
+                    anchors_detail = []
+                    anchor_note = "明确地点，按名称在城市/区域内检索真实 POI，不使用上一站/下一站周边半径。"
+                else:
+                    query = search_intent.keyword_param or place
+                    strategy = f"{search_intent.search_scope}_search"
+                    raw = await _resolve_by_search_intent(search_intent, city, prev_loc, anchors)
+                    anchor_note = (
+                        "地点文本被判定为品牌/品类/偏好型需求，按搜索范围策略执行，避免把它当成唯一 POI 做全城 text 命中。"
+                    )
             role = "activity_poi" if search_intent.search_scope != "exact_place" else "waypoint"
             if search_intent.search_scope in {"citywide_ranked", "region_ranked"}:
                 anchors = []
@@ -539,7 +578,7 @@ async def resolve_place_slots(
             city=city,
             strategy=strategy,
             schedule_context=context,
-            anchor_location=prev_loc,
+            anchor_location=None if search_intent and search_intent.search_scope == "exact_place" else prev_loc,
             route_anchors=anchors,
             route_anchor_context=anchors_detail,
             around=_around_enabled(search_intent),
@@ -552,7 +591,7 @@ async def resolve_place_slots(
             source_text=place or (task.intent if task else query) or query,
             query=query,
             city=city,
-            anchor_location=prev_loc,
+            anchor_location=None if search_intent and search_intent.search_scope == "exact_place" else prev_loc,
             around=_around_enabled(search_intent),
             search_scope=search_intent.search_scope if search_intent else None,
             anchor_policy=search_intent.anchor_policy if search_intent else None,

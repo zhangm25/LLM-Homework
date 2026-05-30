@@ -826,6 +826,40 @@ async def check_place_resolution_syncs_task_and_explicit_poi_selection():
     assert poi_names == ["物美超市(学清路店)", "麦当劳(学清嘉创大厦店)"], poi_names
 
 
+async def check_exact_place_uses_region_text_search_not_around():
+    class TrackingAMap(FakeAMap):
+        def __init__(self):
+            super().__init__()
+            self.text_calls = []
+            self.around_calls = []
+
+        async def search_poi_text(self, keywords, region=None, types=None, page_size=10):
+            self.text_calls.append((keywords, region, types))
+            return [_poi("北京南站", [116.379, 39.865], "交通设施服务;火车站;火车站")]
+
+        async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                    sortrule="weight", page_size=10):
+            self.around_calls.append((keywords, list(location), radius_m, types))
+            return [_poi("错误的周边结果", [location[0] + 0.001, location[1]], rating=4.0)]
+
+    fake = TrackingAMap()
+    sch.get_amap = lambda: fake
+    intent = IntentObject(
+        constraints=Constraints(start=Endpoint(type="current", location=[116.20, 39.90], source="geolocation")),
+        explicit_pois=[ExplicitPOI(name="北京南站", fixed_order_index=0)],
+        tasks=[Task(id="t1", type="leisure", intent="候车", at="北京南站", dwell_min=30, explicit=True)],
+    )
+    resolution = await resolve_place_slots(intent, [116.20, 39.90], "北京")
+    slot = resolution.slots[-1]
+    assert slot.selected and slot.selected.name == "北京南站"
+    assert slot.role == "waypoint"
+    assert slot.search_scope == "exact_place"
+    assert slot.around is False
+    assert slot.anchor_location is None
+    assert fake.text_calls == [("北京南站", "北京", None)]
+    assert fake.around_calls == []
+
+
 async def check_place_resolution_preserves_precise_current_start():
     use_fake()
     full = "北京市海淀区清华园清华大学清华大学附属中学"
@@ -1279,6 +1313,7 @@ CHECKS = [
     check_geolocated_school_start_does_not_clarify,
     check_place_resolution_fills_vague_task_before_planning,
     check_place_resolution_syncs_task_and_explicit_poi_selection,
+    check_exact_place_uses_region_text_search_not_around,
     check_place_resolution_preserves_precise_current_start,
     check_dining_search_uses_previous_and_next_anchors,
     check_dining_inside_named_area_uses_area_around_search_first,
