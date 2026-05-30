@@ -441,7 +441,10 @@ SEARCH_INTENT_SYSTEM = """你是 RoamMind 的地图搜索意图归一化模块�
 
 高德 POI 参数规则：
 1. 周边搜索 endpoint 由后端决定，你不要输出 endpoint 或 key。
-2. keywords 是地点/业态关键字，不要把“午饭/晚饭/吃点东西/坐坐”这类生活语义原样当成唯一关键词。
+2. keywords 会被后端直接输入高德地图 POI 搜索接口。它只能包含“地图上可搜索的 POI 名称/品牌/业态/地点特征”，不能包含动作、目的、语气或行程意图。
+   - 可以写：["麦当劳"], ["超市"], ["生鲜超市"], ["便利店"], ["餐厅"], ["火锅店"], ["咖啡馆"], ["公园"]。
+   - 不能写：["买点东西"], ["生鲜超市 买点东西"], ["吃个饭"], ["找地方坐坐"], ["顺路买水"], ["去看看"], ["放松一下"]。
+   - 如果用户原文是“顺路去生鲜超市买点东西”，keywords 应为 ["生鲜超市"] 或 ["超市","生鲜超市","便利店"]，不要包含“顺路/去/买点东西”。
 3. keywords 必须非空。可用多个词，用数组输出；后端会用“|”拼接，拼接后总长度不能超过 80 字符。
 4. type_codes 只能从白名单里选：050000=餐饮服务，060000=购物服务，080000=体育休闲服务，110000=风景名胜。不要输出其他 code。
 5. 对“午饭/晚饭/吃饭/吃点东西”，search_category=dining，keywords 用 ["餐厅","饭店","中餐","快餐"]，type_codes 用 ["050000"]。
@@ -453,6 +456,7 @@ SEARCH_INTENT_SYSTEM = """你是 RoamMind 的地图搜索意图归一化模块�
 - “找家麦当劳” => search_category=dining, search_scope=around_route, anchor_policy=prev_next, keywords=["麦当劳"], type_codes=["050000"]。
 - “附近吃个饭” => dining, around_anchor 或 around_route, keywords=["餐厅","饭店","中餐","快餐"], type_codes=["050000"]。
 - “顺路去个超市” => shopping, around_route, keywords=["超市"], type_codes=["060000"]。
+- “顺路去生鲜超市买点东西” => shopping, around_route, keywords=["生鲜超市"] 或 ["超市","生鲜超市","便利店"], type_codes=["060000"]，不要输出“买点东西”。
 - “去最好吃的火锅店” => dining, citywide_ranked, keywords=["火锅","火锅店","餐厅"], type_codes=["050000"]。
 - “找个景色好的地方放松” => sightseeing 或 quiet_rest, region_ranked, keywords=["公园","湖","观景台","景区"], type_codes=["110000"]。
 - “北京南站” => exact_place, keywords=["北京南站"]。
@@ -487,6 +491,7 @@ SEARCH_INTENT_USER = """最小相关上下文：
 2. 如果路线锚点同时有 previous 和 next，且需求是附近/顺路/品牌/品类，请输出 search_scope=around_route, anchor_policy=prev_next。
 3. 如果用户任务原文或命名区域/地点中出现“麦当劳/KFC/肯德基/星巴克/瑞幸/超市/便利店/药店/餐厅/咖啡馆/茶馆/火锅店”，它们通常是品牌或品类，不是区域，不要输出 in_area 或 region_ranked。
 4. keywords 必须非空；品牌词要提取为纯品牌名，生活语义要改写成业态词。
+5. keywords 将被直接传给高德搜索，禁止包含动词/目的短语：去、到、找、顺路、附近、买、买点东西、吃、吃饭、坐坐、放松、看看、逛逛等都不应进入 keywords。
 
 请输出地图搜索意图 JSON。"""
 
