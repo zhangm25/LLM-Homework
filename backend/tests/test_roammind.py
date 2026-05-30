@@ -771,6 +771,68 @@ async def check_place_resolution_preserves_precise_current_start():
     assert intent.constraints.start.location == [116.326, 40.004]
 
 
+async def check_dining_search_uses_previous_and_next_anchors():
+    class TrackingAMap(FakeAMap):
+        def __init__(self):
+            super().__init__()
+            self.around_calls = []
+
+        async def search_poi_text(self, keywords, region=None, types=None, page_size=10):
+            if keywords == "五道口":
+                return [_poi("五道口", [116.3373, 39.9929])]
+            return await super().search_poi_text(keywords, region, types, page_size)
+
+        async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                    sortrule="weight", page_size=10):
+            self.around_calls.append((keywords, list(location), radius_m))
+            return [_poi(f"{keywords}@{location[0]:.4f}", [location[0] + 0.001, location[1]], rating=4.6)]
+
+    fake = TrackingAMap()
+    sch.get_amap = lambda: fake
+    intent = IntentObject(
+        constraints=Constraints(start=Endpoint(type="current", value="当前位置", location=[116.3200, 40.0000], source="geolocation")),
+        explicit_pois=[ExplicitPOI(name="五道口", fixed_order_index=0)],
+        tasks=[
+            Task(id="t1", type="dining", intent="吃饭", dwell_min=60, explicit=True),
+            Task(id="t2", type="leisure", intent="逛逛", dwell_min=60, explicit=True),
+        ],
+    )
+    await resolve_place_slots(intent, [116.3200, 40.0000], "北京")
+    dining_calls = [call for call in fake.around_calls if call[0] == "餐厅"]
+    assert any(call[1] == [116.3200, 40.0000] for call in dining_calls), dining_calls
+    assert any(call[1] == [116.3373, 39.9929] for call in dining_calls), dining_calls
+
+
+async def check_dining_inside_named_area_uses_area_around_search_first():
+    class TrackingAMap(FakeAMap):
+        def __init__(self):
+            super().__init__()
+            self.text_calls = []
+            self.around_calls = []
+
+        async def search_poi_text(self, keywords, region=None, types=None, page_size=10):
+            self.text_calls.append(keywords)
+            if keywords == "五道口":
+                return [_poi("五道口", [116.3373, 39.9929])]
+            return [_poi(keywords, _hash_loc(keywords))]
+
+        async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                    sortrule="weight", page_size=10):
+            self.around_calls.append((keywords, list(location), radius_m))
+            return [_poi("五道口附近餐厅", [location[0] + 0.001, location[1]], rating=4.7)]
+
+    fake = TrackingAMap()
+    sch.get_amap = lambda: fake
+    intent = IntentObject(
+        constraints=Constraints(start=Endpoint(type="current", location=[116.3200, 40.0000], source="geolocation")),
+        explicit_pois=[ExplicitPOI(name="五道口", fixed_order_index=0)],
+        tasks=[Task(id="t1", type="dining", intent="吃饭", at="五道口", dwell_min=60, explicit=True)],
+    )
+    await resolve_place_slots(intent, [116.3200, 40.0000], "北京")
+    assert ("餐厅", [116.3373, 39.9929], 2000) in fake.around_calls, fake.around_calls
+    assert "五道口 餐厅" not in fake.text_calls, fake.text_calls
+
+
 def check_fuzzy_preference_clarify_is_nonblocking():
     intent = IntentObject(
         is_available=False,
@@ -851,6 +913,8 @@ CHECKS = [
     check_geolocated_school_start_does_not_clarify,
     check_place_resolution_fills_vague_task_before_planning,
     check_place_resolution_preserves_precise_current_start,
+    check_dining_search_uses_previous_and_next_anchors,
+    check_dining_inside_named_area_uses_area_around_search_first,
     check_fuzzy_preference_clarify_is_nonblocking,
     check_file_parser_csv_itinerary,
     check_file_parser_docx_text,

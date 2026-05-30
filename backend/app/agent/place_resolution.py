@@ -21,6 +21,7 @@ from ..planner.scheduler import (
     _resolve_in_area,
     _resolve_named,
     _resolve_near,
+    _resolve_near_anchors,
     _venue_category,
 )
 from ..tools.amap_client import POI
@@ -81,6 +82,49 @@ async def _resolve_named_slot(slot: PlaceSlot) -> PlaceSlot:
     slot.status = _slot_status(slot.candidates)
     slot.needs_user_choice = len(slot.candidates) > 1
     return slot
+
+
+def _is_route_anchored_activity(task: Optional[Task], category: Optional[str]) -> bool:
+    if not task:
+        return False
+    text = f"{task.intent or ''} {category or ''}"
+    return task.type == "dining" or any(token in text for token in ("吃", "饭", "餐", "咖啡", "茶", "brunch"))
+
+
+async def _next_anchor_location(
+    targets: list[tuple[Optional[str], Optional[Task]]],
+    start_index: int,
+    intent: IntentObject,
+    city: str,
+) -> Optional[list[float]]:
+    for place, task in targets[start_index + 1:]:
+        if task and task.location:
+            return task.location
+        if place:
+            cands = await _resolve_named(place, city)
+            if cands:
+                return cands[0].location
+    for ev in sorted(intent.fixed_events, key=lambda e: e.start):
+        if ev.location:
+            return ev.location
+    end = intent.constraints.end
+    if end and end.location:
+        return end.location
+    if end and end.value:
+        cands = await _resolve_named(end.value, city)
+        if cands:
+            return cands[0].location
+    return None
+
+
+def _unique_anchors(*anchors: Optional[list[float]]) -> list[list[float]]:
+    out: list[list[float]] = []
+    for anchor in anchors:
+        if not anchor:
+            continue
+        if not any(abs(anchor[0] - old[0]) < 0.000001 and abs(anchor[1] - old[1]) < 0.000001 for old in out):
+            out.append(anchor)
+    return out
 
 
 async def resolve_place_slots(
@@ -156,7 +200,8 @@ async def resolve_place_slots(
         slots.append(slot)
 
     prev_loc = start.location or origin or CITY_CENTER.get(city, CITY_CENTER[DEFAULT_CITY])
-    for place, task in _grounding_targets(intent):
+    targets = _grounding_targets(intent)
+    for target_i, (place, task) in enumerate(targets):
         category = _venue_category(task)
         if place and category and not _place_should_be_main_destination(place):
             raw = await _resolve_in_area(place, category, city)
@@ -172,7 +217,12 @@ async def resolve_place_slots(
                 or (_clean_intent(task.intent) if task and task.intent else "")
                 or TASK_DEFAULT_KEYWORD.get(task.type if task else "other", "地点")
             )
-            raw = await _resolve_near(query, prev_loc, city)
+            if _is_route_anchored_activity(task, category):
+                next_loc = await _next_anchor_location(targets, target_i, intent, city)
+                anchors = _unique_anchors(prev_loc, next_loc)
+                raw = await _resolve_near_anchors(query, anchors, city) if anchors else await _resolve_near(query, prev_loc, city)
+            else:
+                raw = await _resolve_near(query, prev_loc, city)
             role = "activity_poi"
 
         slot = PlaceSlot(

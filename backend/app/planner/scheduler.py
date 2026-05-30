@@ -314,6 +314,18 @@ def _rank(cands: list[POI]) -> list[POI]:
     return rated + unrated + usable[CANDIDATE_POOL:]
 
 
+def _dedupe_pois(cands: list[POI]) -> list[POI]:
+    out: list[POI] = []
+    seen: set[str] = set()
+    for poi in cands:
+        key = poi.id or f"{poi.name}:{poi.location[0]:.6f},{poi.location[1]:.6f}"
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(poi)
+    return out
+
+
 def _pick_best(cands: list[POI]) -> Optional[POI]:
     ranked = _rank(cands)
     return ranked[0] if ranked else None
@@ -378,12 +390,13 @@ async def _resolve_in_area(place: str, category: str, city: str) -> list[POI]:
     amap = get_amap()
     if not amap.enabled:
         return []
-    cands = await amap.search_poi_text(f"{place} {category}", region=city, page_size=15)
-    if not cands:  # fall back to a radius search around the area centre
-        area = await _geocode(place, city)
-        if area:
-            cands = await amap.search_poi_around(category, area, radius_m=2000, sortrule="weight", page_size=15)
-    return _rank(cands)
+    cands: list[POI] = []
+    area = await _geocode(place, city)
+    if area:
+        cands = await amap.search_poi_around(category, area, radius_m=2000, sortrule="weight", page_size=15)
+    if not cands:
+        cands = await amap.search_poi_text(f"{place} {category}", region=city, page_size=15)
+    return _rank(_dedupe_pois(cands))
 
 
 async def _resolve_near(query: str, prev_loc: list[float], city: str) -> list[POI]:
@@ -395,7 +408,24 @@ async def _resolve_near(query: str, prev_loc: list[float], city: str) -> list[PO
     cands = await amap.search_poi_around(query, prev_loc, radius_m=8000, sortrule="weight", page_size=15)
     if not cands:
         cands = await amap.search_poi_text(query, region=city, page_size=15)
-    return _rank(cands)
+    return _rank(_dedupe_pois(cands))
+
+
+async def _resolve_near_anchors(query: str, anchors: list[list[float]], city: str) -> list[POI]:
+    """Search an activity around explicit route anchors.
+
+    Dining/coffee/rest tasks should stay on-route. Search around previous and
+    next known points first; city-wide text search is only a last resort.
+    """
+    amap = get_amap()
+    if not amap.enabled:
+        return []
+    cands: list[POI] = []
+    for anchor in anchors:
+        cands.extend(await amap.search_poi_around(query, anchor, radius_m=3000, sortrule="weight", page_size=10))
+    if not cands:
+        cands = await amap.search_poi_text(query, region=city, page_size=15)
+    return _rank(_dedupe_pois(cands))
 
 
 async def _leg_for(a: list[float], b: list[float]) -> tuple[Optional[Leg], str]:
