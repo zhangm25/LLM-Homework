@@ -205,13 +205,11 @@ function roleLabel(role: string) {
     case "end":
       return "终点";
     case "fixed":
-      return "固定";
     case "waypoint":
-      return "途经";
     case "activity_poi":
-      return "活动";
+      return "途径";
     default:
-      return "地点";
+      return "途径";
   }
 }
 
