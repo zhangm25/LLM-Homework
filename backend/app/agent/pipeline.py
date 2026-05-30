@@ -90,6 +90,38 @@ def _format_history(req: ChatRequest, limit: int = 6) -> str:
     return "\n".join(f"{name[m.role]}: {m.content}" for m in rows)
 
 
+def _format_file_context(req: ChatRequest, limit: int = 16_000) -> str:
+    if not req.file_contexts:
+        return "（无）"
+    blocks = []
+    remaining = limit
+    for i, ctx in enumerate(req.file_contexts, start=1):
+        header = (
+            f"附件 {i}: {ctx.filename}\n"
+            f"- 类型: {ctx.kind}{' / ' + ctx.content_type if ctx.content_type else ''}\n"
+            f"- 摘要: {ctx.summary}"
+        )
+        warnings = "\n".join(f"- 注意: {w}" for w in ctx.warnings[:3])
+        body = ctx.text or ""
+        if ctx.rows and not body:
+            body = "\n".join(" | ".join(c for c in row if c) for row in ctx.rows[:40])
+        block = "\n".join(part for part in (header, warnings, "内容:", body) if part)
+        if len(block) > remaining:
+            block = block[:remaining] + "\n...[附件内容已截断]"
+        blocks.append(block)
+        remaining -= len(block)
+        if remaining <= 0:
+            break
+    return "\n\n".join(blocks)
+
+
+def _message_for_heuristic(req: ChatRequest) -> str:
+    file_context = _format_file_context(req, limit=6000)
+    if file_context == "（无）":
+        return req.message
+    return f"{req.message}\n\n附件内容：\n{file_context}".strip()
+
+
 def _itinerary_text(plan: Plan) -> str:
     lines = []
     for s in plan.timeline:
@@ -946,6 +978,7 @@ async def _validate_with_llm(req: ChatRequest, intent: IntentObject, issues: lis
         city=req.city or "未知",
         origin=_origin_context_text(req),
         history=_format_history(req),
+        file_context=_format_file_context(req),
     )
     _debug_state("validation:llm_request", issues=issues, intent=intent)
     data = await llm.complete_json(P1_VALIDATE_SYSTEM, user, settings.llm_temperature_cold, stage="P1_VALIDATE")
@@ -1046,7 +1079,7 @@ async def _extract_intent(req: ChatRequest) -> IntentObject:
             )
             intent = None  # degrade to the heuristic below rather than 500
     if intent is None:
-        intent = augment_intent(extract_intent_heuristic(req.message, req.city), req.message)
+        intent = augment_intent(extract_intent_heuristic(_message_for_heuristic(req), req.city), req.message)
         _debug_state("extract_intent:fallback", route="heuristic", intent=intent)
     else:
         intent = augment_intent(intent, req.message)
@@ -1070,6 +1103,7 @@ async def _complete_pending_intent_llm(req: ChatRequest, prior: IntentObject, ll
         city=req.city or "未知",
         origin=_origin_context_text(req),
         history=_format_history(req),
+        file_context=_format_file_context(req),
     )
     draft = await llm.complete_json(P1_CLARIFY_SYSTEM, user, settings.llm_temperature_cold, stage="P1_CLARIFY")
     return _intent_from_validation_patch(draft, prior)
@@ -1087,6 +1121,7 @@ async def _extract_intent_llm(req: ChatRequest, llm) -> IntentObject:
             city=req.city or "未知",
             origin=origin_text,
             history=_format_history(req),
+            file_context=_format_file_context(req),
         )
         draft = await llm.complete_json(P1_PATCH_SYSTEM, user, cold, stage="P1_PATCH")
     else:
@@ -1100,6 +1135,7 @@ async def _extract_intent_llm(req: ChatRequest, llm) -> IntentObject:
                 else json.dumps(req.intent, ensure_ascii=False) if req.intent else "（无）"
             ),
             history=_format_history(req),
+            file_context=_format_file_context(req),
         )
         draft = await llm.complete_json(P1_SEGMENTS_SYSTEM, user, cold, stage="P1_SEGMENTS")
 
@@ -1125,7 +1161,7 @@ async def plan_stream(req: ChatRequest) -> AsyncIterator[StreamEvent]:
     settings = get_settings()
     try:
         # --- 0. empty input -> ask, don't invent a trip ------------------
-        if not (req.message or "").strip() and not req.scenario:
+        if not (req.message or "").strip() and not req.scenario and not req.file_contexts:
             yield _ev(type="clarify", text=_DEFAULT_CLARIFY_Q, options=[])
             yield _ev(type="done")
             return
@@ -1159,6 +1195,7 @@ async def plan_stream(req: ChatRequest) -> AsyncIterator[StreamEvent]:
             city=req.city,
             origin=req.origin,
             origin_status=req.origin_status,
+            file_count=len(req.file_contexts),
             has_intent=isinstance(req.intent, IntentObject),
             scenario=req.scenario,
         )

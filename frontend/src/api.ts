@@ -1,4 +1,4 @@
-import type { AppConfig, ChatRequestBody, Plan, StreamEvent, Stop } from "./types";
+import type { AppConfig, ChatRequestBody, FileContext, Plan, StreamEvent, Stop } from "./types";
 
 const ENV_BASE = import.meta.env.VITE_API_BASE_URL?.trim();
 // Default to SAME-ORIGIN (relative) requests, so the app never depends on a
@@ -92,6 +92,29 @@ export async function geocodePlace(
   } catch {
     return null;
   }
+}
+
+export async function parseAttachment(file: File): Promise<FileContext> {
+  const resp = await fetch(`${API_BASE}/api/files/parse`, {
+    method: "POST",
+    headers: {
+      "Content-Type": file.type || "application/octet-stream",
+      "X-Filename": encodeURIComponent(file.name),
+    },
+    body: file,
+  });
+  if (!resp.ok) {
+    let detail = `文件解析失败：HTTP ${resp.status}`;
+    try {
+      const data = (await resp.json()) as { detail?: string };
+      if (data.detail) detail = data.detail;
+    } catch {
+      /* ignore */
+    }
+    throw new Error(detail);
+  }
+  const data = (await resp.json()) as FileContext;
+  return { ...data, filename: decodeURIComponent(data.filename) };
 }
 
 /**

@@ -12,7 +12,9 @@ from __future__ import annotations
 import asyncio
 import os
 import sys
+import zipfile
 from pathlib import Path
+from io import BytesIO
 
 # Force the keyless (heuristic) path for pipeline tests; AMap is faked per-test.
 os.environ["LLM_API_KEY"] = ""
@@ -39,6 +41,7 @@ from app.agent.pipeline import (  # noqa: E402
     _allow_nonblocking_llm_clarification,
 )
 from app.agent.place_resolution import resolve_place_slots  # noqa: E402
+from app.tools.file_parser import parse_attachment  # noqa: E402
 
 
 # --------------------------------------------------------------------------
@@ -792,6 +795,35 @@ def check_fuzzy_preference_clarify_is_nonblocking():
     assert still_blocking.clarification_needed
 
 
+def check_file_parser_csv_itinerary():
+    ctx = parse_attachment(
+        "行程表.csv",
+        "时间,地点,事项\n09:00,上海中心,开会\n12:00,附近,午饭\n".encode("utf-8"),
+        "text/csv",
+    )
+    assert ctx.kind == "table"
+    assert ctx.rows[0][:3] == ["时间", "地点", "事项"]
+    assert "上海中心" in ctx.text
+    assert "解析出" in ctx.summary
+
+
+def check_file_parser_docx_text():
+    xml = """<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    <w:p><w:r><w:t>10:00 到上海中心开会</w:t></w:r></w:p>
+    <w:p><w:r><w:t>14:00 去浦东软件园</w:t></w:r></w:p>
+  </w:body>
+</w:document>"""
+    buf = BytesIO()
+    with zipfile.ZipFile(buf, "w") as zf:
+        zf.writestr("word/document.xml", xml)
+    ctx = parse_attachment("会议安排.docx", buf.getvalue(), "application/vnd.openxmlformats-officedocument.wordprocessingml.document")
+    assert ctx.kind == "document"
+    assert "上海中心" in ctx.text
+    assert "浦东软件园" in ctx.text
+
+
 # --------------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------------
@@ -820,6 +852,8 @@ CHECKS = [
     check_place_resolution_fills_vague_task_before_planning,
     check_place_resolution_preserves_precise_current_start,
     check_fuzzy_preference_clarify_is_nonblocking,
+    check_file_parser_csv_itinerary,
+    check_file_parser_docx_text,
 ]
 
 

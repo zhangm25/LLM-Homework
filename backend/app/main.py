@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
+from urllib.parse import unquote
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +22,7 @@ from .mock.demo_data import SCENARIO_KEYWORDS
 from .models.plan import ChatRequest, Plan, RouteSwapRequest
 from .planner.scheduler import recompute_plan
 from .tools.amap_client import get_amap
+from .tools.file_parser import MAX_FILE_BYTES, parse_attachment
 
 
 @asynccontextmanager
@@ -96,6 +98,27 @@ async def places(q: str, city: str | None = None) -> dict:
             for p in pois
         ]
     }
+
+
+@app.post("/api/files/parse")
+async def parse_file(
+    request: Request,
+    x_filename: str | None = Header(default=None),
+    content_type: str | None = Header(default=None),
+) -> dict:
+    """Parse an itinerary attachment into compact text/table context.
+
+    The frontend sends raw file bytes instead of multipart so the backend does
+    not need python-multipart. Parsed context is passed to /api/chat; files are
+    not stored server-side.
+    """
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="文件为空")
+    if len(data) > MAX_FILE_BYTES * 2:
+        raise HTTPException(status_code=413, detail="文件过大，请上传 12MB 以内的文件")
+    ctx = parse_attachment(unquote(x_filename or "attachment"), data, content_type)
+    return ctx.model_dump()
 
 
 @app.post("/api/route")

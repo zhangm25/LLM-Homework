@@ -76,8 +76,10 @@ P1_SEGMENTS_USER = """用户当前这句话：
 - 当前位置：{origin}
 - 上一轮 Intent JSON：{intent}
 - 历史对话：{history}
+- 附件解析内容：{file_context}
 
 如果上一轮 Intent JSON 非空，用户当前这句话可能是在延续、补充、修改上一轮行程；请结合它理解，不要忘记已确认的起点、终点、站点、时间和偏好。
+如果附件解析内容非空，它可能是用户上传的行程表/会议安排/旅行计划；请把其中明确的时间、地点、事件纳入结构体：硬时间安排写 fixed_events，自由活动写 segments/tasks，地点名保留原文，不要丢失日期和时间。
 只输出 JSON。"""
 
 
@@ -130,6 +132,7 @@ P1_PATCH_USER = """上一轮 Intent JSON：
 - 城市：{city}
 - 当前位置：{origin}
 - 历史对话：{history}
+- 附件解析内容：{file_context}
 
 请输出修改后的完整行程 JSON。"""
 
@@ -183,6 +186,7 @@ P1_CLARIFY_USER = """上一轮未完成的 Intent JSON：
 - 城市：{city}
 - 当前位置：{origin}
 - 历史对话：{history}
+- 附件解析内容：{file_context}
 
 请只输出补全后的 JSON。"""
 

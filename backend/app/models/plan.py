@@ -31,6 +31,16 @@ class GeoPoint(BaseModel):
     label: Optional[str] = None
 
 
+class FileContext(BaseModel):
+    filename: str
+    content_type: Optional[str] = None
+    kind: str = "text"
+    summary: str = ""
+    text: str = ""
+    rows: list[list[str]] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 OriginStatus = Literal["available", "unknown", "denied", "unsupported", "unavailable", "timeout"]
 
 
@@ -45,6 +55,8 @@ class ChatRequest(BaseModel):
     origin_status: OriginStatus = "unknown"
     # Carry the Intent Object across turns for incremental replanning (§6.4.6).
     intent: Optional[IntentObject] = None
+    # Parsed user attachments, e.g. itinerary spreadsheets or documents.
+    file_contexts: list[FileContext] = Field(default_factory=list)
     # Force a built-in demo scenario ("sc1".."sc4"); used by the preset chips.
     scenario: Optional[str] = None
 

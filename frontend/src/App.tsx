@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import TopBar from "./components/TopBar";
-import ChatPanel from "./components/ChatPanel";
+import ChatPanel, { type AttachedFile } from "./components/ChatPanel";
 import PlanPanel from "./components/PlanPanel";
-import { getConfig, recomputeRoute, reverseGeocode, streamChat, type PlaceCandidate } from "./api";
+import { getConfig, parseAttachment, recomputeRoute, reverseGeocode, streamChat, type PlaceCandidate } from "./api";
 import type {
   AppConfig,
   ChatItem,
@@ -74,6 +74,7 @@ export default function App() {
   const [activeScenario, setActiveScenario] = useState<string | null>(null);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [originSearchFocusSignal, setOriginSearchFocusSignal] = useState(0);
+  const [attachments, setAttachments] = useState<AttachedFile[]>([]);
 
   const idCounter = useRef(0);
   const streamingIdRef = useRef<string | null>(null);
@@ -214,9 +215,10 @@ export default function App() {
   };
 
   const send = async (text: string, scenario?: string, presetCity?: string, fresh = false) => {
-    if (busy || !text.trim()) return;
+    const readyFiles = attachments.filter((file) => file.status === "ready" && file.context);
+    if (busy || (!text.trim() && readyFiles.length === 0)) return;
     setBusy(true);
-    setThinking("正在理解你的需求 🧭");
+    setThinking(readyFiles.length ? "正在结合附件理解你的行程 🧭" : "正在理解你的需求 🧭");
     setActiveScenario(scenario ?? null);
     streamingIdRef.current = null;
     planRef.current = null;
@@ -232,16 +234,20 @@ export default function App() {
     setItems((prev) => (fresh ? [userMsg] : [...prev, userMsg]));
 
     const body: ChatRequestBody = {
-      message: text,
+      message: text || "请根据我上传的行程表整理并规划路线。",
       history,
       city: presetCity ?? city,
       origin: originRef.current,
       origin_status: originStatus,
       scenario: scenario ?? null,
       intent: fresh ? null : intentRef.current,
+      file_contexts: readyFiles.map((file) => file.context!),
     };
     try {
       await streamChat(body, onEvent);
+      if (readyFiles.length) {
+        setAttachments((prev) => prev.filter((file) => file.status !== "ready"));
+      }
     } catch (e) {
       setItems((prev) => [
         ...prev,
@@ -285,6 +291,32 @@ export default function App() {
       setPlan(merged);
     }
     setSwappingIndex(null);
+  };
+
+  const onAttachFile = async (file: File) => {
+    if (busy) return;
+    const id = uid();
+    setAttachments((prev) => [...prev, { id, name: file.name, status: "parsing" }]);
+    try {
+      const context = await parseAttachment(file);
+      setAttachments((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, status: "ready", context } : item)),
+      );
+      setItems((prev) => [
+        ...prev,
+        { id: uid(), kind: "status", text: `已解析附件「${file.name}」：${context.summary}` },
+      ]);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "解析失败";
+      setAttachments((prev) =>
+        prev.map((item) => (item.id === id ? { ...item, status: "error", error: message } : item)),
+      );
+    }
+  };
+
+  const onRemoveAttachment = (id: string) => {
+    if (busy) return;
+    setAttachments((prev) => prev.filter((file) => file.id !== id));
   };
 
   const onPickPlaceCandidate = async (slotId: string, candidate: ResolvedPlaceCandidate) => {
@@ -373,6 +405,9 @@ export default function App() {
           streamingId={streamingId}
           busy={busy}
           onSend={(t) => send(t)}
+          onAttachFile={onAttachFile}
+          onRemoveAttachment={onRemoveAttachment}
+          attachments={attachments}
         />
         <PlanPanel
           plan={plan}

@@ -123,6 +123,16 @@ export interface ClarifyOption {
   message: string;
 }
 
+export interface FileContext {
+  filename: string;
+  content_type: string | null;
+  kind: string;
+  summary: string;
+  text: string;
+  rows: string[][];
+  warnings: string[];
+}
+
 export type StreamEvent =
   | { type: "thinking"; text: string }
   | { type: "understanding"; understanding: Understanding }
@@ -145,6 +155,7 @@ export interface ChatRequestBody {
   origin_status?: "available" | "unknown" | "denied" | "unsupported" | "unavailable" | "timeout";
   scenario?: string | null;
   intent?: unknown | null;
+  file_contexts?: FileContext[];
 }
 
 export interface AppConfig {
