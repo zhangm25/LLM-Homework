@@ -62,6 +62,8 @@ body{font-family:var(--font);background:var(--bg);color:var(--ink);
 .tab:disabled{opacity:.55;cursor:not-allowed}
 /* layout */
 .layout{display:grid;grid-template-columns:minmax(360px,5fr) 7fr;gap:24px;max-width:1240px;margin:0 auto;padding:18px 28px 38px;align-items:stretch}
+.layout.map-expanded{grid-template-columns:1fr;max-width:min(1480px,100%);padding-top:14px}
+.layout.map-expanded .plan{min-width:0}
 /* panel title — bigger, darker, with colored dot */
 .panel-title{display:flex;align-items:center;gap:9px;font-size:14.5px;font-weight:650;color:var(--ink);margin:0 4px 13px}
 .panel-title .dot{width:9px;height:9px;border-radius:50%}
@@ -150,13 +152,21 @@ body{font-family:var(--font);background:var(--bg);color:var(--ink);
 /* plan */
 .plan{display:flex;flex-direction:column}
 .mapcard{background:var(--surface);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;box-shadow:var(--shadow);min-height:360px}
+.mapcard.expanded{min-height:calc(100vh - 220px)}
 /* empty state: fill the (stretched) plan column so it matches the chat card height */
 .mapcard-empty{flex:1;display:flex}
 .map-top{display:flex;align-items:center;justify-content:space-between;padding:13px 16px;border-bottom:1px solid var(--line)}
 .map-top .t{font-size:14.5px;font-weight:650}
+.map-actions{display:flex;align-items:center;gap:12px;min-width:0}
 .map-top .stat{font-size:12.5px;color:var(--ink-2);display:flex;gap:14px}
 .map-top .stat b{color:var(--ink);font-weight:600}
+.map-expand-btn{font-family:inherit;font-size:12px;font-weight:650;color:var(--sage);background:var(--sage-soft);
+  border:1px solid var(--sage-bd);border-radius:999px;padding:5px 10px;display:inline-flex;align-items:center;gap:5px;
+  white-space:nowrap;cursor:pointer;transition:all .15s}
+.map-expand-btn:hover{background:#DDE9E2;border-color:#C6D9CF;transform:translateY(-1px)}
+.map-expand-btn span{font-size:13px;line-height:1}
 .mapwrap{position:relative;height:300px;background:radial-gradient(120% 90% at 70% 10%,#FBFAF7 0%,#F0ECE5 100%)}
+.mapcard.expanded .mapwrap{height:min(72vh,760px);min-height:520px}
 svg.map{width:100%;height:100%;display:block}
 .route{fill:none;stroke:var(--accent);stroke-width:3.5;stroke-linecap:round;stroke-linejoin:round;
   stroke-dasharray:1100;stroke-dashoffset:1100;animation:draw 1.9s ease .25s forwards;filter:drop-shadow(0 3px 6px rgba(201,100,66,.25))}
@@ -272,7 +282,7 @@ svg.map{width:100%;height:100%;display:block}
   .chat{position:static;height:auto}
   .chat-card{min-height:540px}
   .stream{max-height:calc(100vh - 240px)}}
-@media (max-width:640px){.clarify-options,.segment-nav{grid-template-columns:1fr}.map-top{align-items:flex-start;gap:8px;flex-direction:column}.map-top .stat{flex-wrap:wrap}}
+@media (max-width:640px){.clarify-options,.segment-nav{grid-template-columns:1fr}.map-top{align-items:flex-start;gap:8px;flex-direction:column}.map-actions{width:100%;align-items:flex-start;justify-content:space-between}.map-top .stat{flex-wrap:wrap}.mapcard.expanded .mapwrap{height:68vh;min-height:420px}}
 @media (max-width:640px){.export-actions{grid-template-columns:1fr}}
 @media (max-width:760px){.topbar{align-items:flex-start;flex-wrap:wrap}.topbar .spacer{display:none}.locbox{width:100%;flex-wrap:wrap}.loc-pill{max-width:100%}.manual-loc{flex:1}.manual-loc input{width:100%;min-width:150px}}
 

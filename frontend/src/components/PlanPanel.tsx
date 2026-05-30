@@ -12,6 +12,8 @@ export default function PlanPanel({
   onSwap,
   onPickPlaceCandidate,
   swappingIndex,
+  mapExpanded = false,
+  onToggleMapExpanded,
 }: {
   plan: Plan | null;
   onRelocate?: () => void;
@@ -19,6 +21,8 @@ export default function PlanPanel({
   onSwap?: (stopIndex: number, choice: POIChoice) => void;
   onPickPlaceCandidate?: (slotId: string, candidate: PlaceCandidate) => void;
   swappingIndex?: number | null;
+  mapExpanded?: boolean;
+  onToggleMapExpanded?: () => void;
 }) {
   const slots = useMemo(() => orderedPlaceSlots(plan), [plan]);
   const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
@@ -46,19 +50,31 @@ export default function PlanPanel({
 
       {plan ? (
         <>
-          <div className="mapcard">
+          <div className={`mapcard${mapExpanded ? " expanded" : ""}`}>
             <div className="map-top">
               <div className="t">今日路线</div>
-              <div className="stat">
-                <span>
-                  全程 <b>{plan.summary.total_distance_text}</b>
-                </span>
-                <span>
-                  约 <b>{plan.summary.total_duration_text}</b>
-                </span>
-                <span>
-                  <b>{plan.summary.stop_count}</b> 站
-                </span>
+              <div className="map-actions">
+                <div className="stat">
+                  <span>
+                    全程 <b>{plan.summary.total_distance_text}</b>
+                  </span>
+                  <span>
+                    约 <b>{plan.summary.total_duration_text}</b>
+                  </span>
+                  <span>
+                    <b>{plan.summary.stop_count}</b> 站
+                  </span>
+                </div>
+                <button
+                  className="map-expand-btn"
+                  type="button"
+                  onClick={onToggleMapExpanded}
+                  aria-pressed={mapExpanded}
+                  title={mapExpanded ? "缩小地图，恢复对话框" : "放大地图，暂时隐藏对话框"}
+                >
+                  <span aria-hidden="true">{mapExpanded ? "↙" : "↗"}</span>
+                  {mapExpanded ? "缩小地图" : "放大地图"}
+                </button>
               </div>
             </div>
             <MapView

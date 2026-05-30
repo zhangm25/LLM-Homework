@@ -75,6 +75,7 @@ export default function App() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [originSearchFocusSignal, setOriginSearchFocusSignal] = useState(0);
   const [attachments, setAttachments] = useState<AttachedFile[]>([]);
+  const [mapExpanded, setMapExpanded] = useState(false);
 
   const idCounter = useRef(0);
   const streamingIdRef = useRef<string | null>(null);
@@ -174,6 +175,7 @@ export default function App() {
         intentRef.current = ev.plan.intent ?? null;
         setPlan(ev.plan);
         setCity(ev.plan.city);
+        setMapExpanded(false);
         break;
       case "clarify":
         setThinking(null);
@@ -227,6 +229,7 @@ export default function App() {
     if (fresh) {
       setPlan(null);
       intentRef.current = null;
+      setMapExpanded(false);
     }
 
     const history = fresh ? [] : itemsToHistory(itemsRef.current);
@@ -365,6 +368,7 @@ export default function App() {
     setPlan(null);
     planRef.current = null;
     intentRef.current = null;
+    setMapExpanded(false);
     setThinking(null);
     setActiveScenario(null);
   };
@@ -398,17 +402,19 @@ export default function App() {
         </button>
       </div>
 
-      <div className="layout">
-        <ChatPanel
-          items={items}
-          thinking={thinking}
-          streamingId={streamingId}
-          busy={busy}
-          onSend={(t) => send(t)}
-          onAttachFile={onAttachFile}
-          onRemoveAttachment={onRemoveAttachment}
-          attachments={attachments}
-        />
+      <div className={`layout${mapExpanded ? " map-expanded" : ""}`}>
+        {!mapExpanded ? (
+          <ChatPanel
+            items={items}
+            thinking={thinking}
+            streamingId={streamingId}
+            busy={busy}
+            onSend={(t) => send(t)}
+            onAttachFile={onAttachFile}
+            onRemoveAttachment={onRemoveAttachment}
+            attachments={attachments}
+          />
+        ) : null}
         <PlanPanel
           plan={plan}
           onRelocate={onRelocate}
@@ -416,6 +422,8 @@ export default function App() {
           onSwap={onSwap}
           onPickPlaceCandidate={onPickPlaceCandidate}
           swappingIndex={swappingIndex}
+          mapExpanded={mapExpanded}
+          onToggleMapExpanded={() => setMapExpanded((v) => !v)}
         />
       </div>
 
