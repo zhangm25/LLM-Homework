@@ -566,6 +566,10 @@ async def resolve_place_slots(
         if slot.selected:
             if task:
                 _apply_to_task(task, slot.selected)
+                if place:
+                    explicit = _match_explicit(intent, place)
+                    if explicit:
+                        _apply_to_explicit(explicit, slot.selected)
             elif place:
                 explicit = _match_explicit(intent, place)
                 if explicit:

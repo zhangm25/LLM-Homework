@@ -789,6 +789,43 @@ async def check_place_resolution_fills_vague_task_before_planning():
     assert any(s.name == "静静咖啡" for s in plan.timeline)
 
 
+async def check_place_resolution_syncs_task_and_explicit_poi_selection():
+    class TrackingAMap(FakeAMap):
+        async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                    sortrule="weight", page_size=10):
+            if "麦当劳" in keywords:
+                return [_poi("麦当劳(学清嘉创大厦店)", [116.333, 40.012], rating=4.6, address="学清路10号")]
+            if "超市" in keywords:
+                return [_poi("物美超市(学清路店)", [116.331, 40.012], rating=4.7, address="学清路甲8号")]
+            return []
+
+    fake = TrackingAMap()
+    sch.get_amap = lambda: fake
+    home = [116.329398, 40.011394]
+    intent = IntentObject(
+        constraints=Constraints(
+            city="北京",
+            start=Endpoint(type="named", value="清华大学紫荆学生公寓", location=home, source="nl_extract"),
+            end=Endpoint(type="named", value="清华大学紫荆学生公寓", location=home, source="nl_extract"),
+        ),
+        explicit_pois=[
+            ExplicitPOI(name="生鲜超市", fixed_order_index=0),
+            ExplicitPOI(name="麦当劳", fixed_order_index=1),
+        ],
+        tasks=[
+            Task(id="t1", type="shopping", intent="买点东西", at="生鲜超市", dwell_min=60, explicit=True),
+            Task(id="t2", type="dining", intent="吃饭", at="麦当劳", dwell_min=60, explicit=True),
+        ],
+    )
+    await resolve_place_slots(intent, home, "北京")
+    assert [p.name for p in intent.explicit_pois] == ["物美超市(学清路店)", "麦当劳(学清嘉创大厦店)"]
+    assert [t.at for t in intent.tasks] == ["物美超市(学清路店)", "麦当劳(学清嘉创大厦店)"]
+
+    plan = await build_plan(intent, home, "北京")
+    poi_names = [s.name for s in plan.timeline if s.kind == "poi"]
+    assert poi_names == ["物美超市(学清路店)", "麦当劳(学清嘉创大厦店)"], poi_names
+
+
 async def check_place_resolution_preserves_precise_current_start():
     use_fake()
     full = "北京市海淀区清华园清华大学清华大学附属中学"
@@ -1241,6 +1278,7 @@ CHECKS = [
     check_school_endpoint_choice_clarify, check_school_start_choice_clarify,
     check_geolocated_school_start_does_not_clarify,
     check_place_resolution_fills_vague_task_before_planning,
+    check_place_resolution_syncs_task_and_explicit_poi_selection,
     check_place_resolution_preserves_precise_current_start,
     check_dining_search_uses_previous_and_next_anchors,
     check_dining_inside_named_area_uses_area_around_search_first,
