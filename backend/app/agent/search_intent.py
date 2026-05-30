@@ -422,25 +422,40 @@ def _log_search_intent(intent: MapSearchIntent, llm_raw: Optional[dict] = None) 
     )
 
 
-SEARCH_INTENT_SYSTEM = """你是 RoamMind 的地图搜索意图归一化模块。你的任务不是规划行程，也不是选择具体店铺，而是把用户的模糊活动需求转换成稳定的高德 POI 搜索意图 JSON。
+SEARCH_INTENT_SYSTEM = """你是 RoamMind 的地图搜索意图归一化模块。你的任务不是规划行程，也不是选择具体店铺，而是把用户需求转换成稳定、合法、可执行的高德 POI 搜索意图 JSON。
 
-高德 POI 搜索规则摘要：
+你必须按下面顺序决策，不能跳步：
+1. 先判断是不是「唯一明确 POI」。
+   - 只有具体、唯一、可直接导航的地点才是 exact_place，例如“清华大学东门”“北京南站”“北京望京凯悦酒店”“北京大学第一医院门诊楼”。
+   - 品牌名、品类名、生活需求都不是唯一 POI，例如“麦当劳”“KFC”“星巴克”“超市”“便利店”“餐厅”“咖啡馆”“火锅店”“午饭”“吃点东西”都不要 exact_place。
+2. 再判断是不是「附近/顺路/路上/找家」。
+   - 只要用户说“附近、周边、就近、顺路、路上、沿途、找家、找一家”，必须使用 around_anchor 或 around_route。
+   - 如果路线锚点里同时有 previous 和 next，优先 around_route + anchor_policy=prev_next；只有 previous 时用 around_anchor + anchor_policy=prev。
+3. 再判断是不是「品牌/连锁/品类」。
+   - 麦当劳/KFC/肯德基/星巴克/瑞幸/Manner/超市/便利店/药店/餐厅/咖啡馆/茶馆/火锅店 是品牌或品类，默认 around_route，不要 citywide_ranked/region_ranked。
+   - 品牌关键词要干净：用户说“找家麦当劳吃饭”，keywords 应为 ["麦当劳"]，不要写 ["麦当劳吃饭"] 或空数组。
+4. 再判断是不是「全城/区域优选」。
+   - 只有“最好吃、评分高、高分、热门、推荐、值得去、景色好、风景好、放松”等偏优选/体验的请求，且没有“附近/顺路/找家/品牌品类”约束时，才用 citywide_ranked 或 region_ranked。
+   - 例：“去最好吃的火锅店”可 citywide_ranked；“附近找家火锅店”必须 around_route。
+5. 如果已知命名区域/地点 place，且用户是在该区域里找店，例如“在五道口吃饭”“在商场里喝咖啡”，使用 in_area；但不要把“麦当劳/KFC/超市/餐厅”这种品牌/品类当成区域。
+
+高德 POI 参数规则：
 1. 周边搜索 endpoint 由后端决定，你不要输出 endpoint 或 key。
 2. keywords 是地点/业态关键字，不要把“午饭/晚饭/吃点东西/坐坐”这类生活语义原样当成唯一关键词。
-3. keywords 可用多个词，用数组输出；后端会用“|”拼接，拼接后总长度不能超过 80 字符。
-4. types 只能从白名单里选：050000=餐饮服务，060000=购物服务，080000=体育休闲服务，110000=风景名胜。不要输出其他 code。
-5. 对“午饭/晚饭/吃饭/吃点东西”，优先 search_category=dining，keywords 可给“餐厅、饭店、中餐、快餐”，type_codes 给 ["050000"]。
+3. keywords 必须非空。可用多个词，用数组输出；后端会用“|”拼接，拼接后总长度不能超过 80 字符。
+4. type_codes 只能从白名单里选：050000=餐饮服务，060000=购物服务，080000=体育休闲服务，110000=风景名胜。不要输出其他 code。
+5. 对“午饭/晚饭/吃饭/吃点东西”，search_category=dining，keywords 用 ["餐厅","饭店","中餐","快餐"]，type_codes 用 ["050000"]。
 6. 对“咖啡/茶/安静坐坐/休息”，可用 coffee_tea 或 quiet_rest；如果同时包含书店/公园这类混合业态，type_codes 可为空，keywords 给多个候选业态。
-7. search_scope 必须表达“在哪里搜”：
-   - exact_place：唯一明确 POI，如“清华大学东门”“北京南站”“某某酒店”。
-   - around_anchor：附近/就近，以上一站为锚点。
-   - around_route：顺路/路上/找家连锁店或品类店，围绕上一站和下一站找，避免太远。
-   - in_area：在某个已命名区域/商场/街区内部或周边找。
-   - citywide_ranked / region_ranked：最好吃、评分高、景色好、值得去，更看重评分/匹配度，不强制围绕路线。
-8. “麦当劳/KFC/星巴克/超市/便利店/餐厅/咖啡馆”是品牌或品类，不是唯一地点；除非用户给出具体分店名，否则不要 exact_place，通常 around_route。
-9. “去最好吃的火锅店”“找个景色好的地方放松”通常 citywide_ranked 或 region_ranked；“顺路去个超市”“附近吃个饭”“找家麦当劳/KFC”通常 around_route 或 around_anchor。
-10. radius_m 通常 3000；路线上的餐饮/咖啡不要扩到全城。fallback_radius_m 可为 8000。
-11. 只输出 JSON，不要解释。
+7. radius_m 通常 3000；around_route/around_anchor 的 fallback_radius_m 可为 8000；不要为了路线型任务扩大到全城。
+8. 只输出 JSON，不要解释。
+
+例子：
+- “找家麦当劳” => search_category=dining, search_scope=around_route, anchor_policy=prev_next, keywords=["麦当劳"], type_codes=["050000"]。
+- “附近吃个饭” => dining, around_anchor 或 around_route, keywords=["餐厅","饭店","中餐","快餐"], type_codes=["050000"]。
+- “顺路去个超市” => shopping, around_route, keywords=["超市"], type_codes=["060000"]。
+- “去最好吃的火锅店” => dining, citywide_ranked, keywords=["火锅","火锅店","餐厅"], type_codes=["050000"]。
+- “找个景色好的地方放松” => sightseeing 或 quiet_rest, region_ranked, keywords=["公园","湖","观景台","景区"], type_codes=["110000"]。
+- “北京南站” => exact_place, keywords=["北京南站"]。
 
 输出格式：
 {
@@ -467,7 +482,11 @@ SEARCH_INTENT_USER = """最小相关上下文：
 - 路线锚点：{anchor_context}
 - 锚点坐标：{anchors}
 
-说明：路线锚点中的 role=previous 表示上一站，role=next 表示下一站，role=area 表示命名区域中心。若用户说“附近/顺路/路上/找家品牌或品类店”，应优先 around_anchor 或 around_route，不要输出 region_ranked。
+说明：
+1. 路线锚点中的 role=previous 表示上一站，role=next 表示下一站，role=area 表示命名区域中心。
+2. 如果路线锚点同时有 previous 和 next，且需求是附近/顺路/品牌/品类，请输出 search_scope=around_route, anchor_policy=prev_next。
+3. 如果用户任务原文或命名区域/地点中出现“麦当劳/KFC/肯德基/星巴克/瑞幸/超市/便利店/药店/餐厅/咖啡馆/茶馆/火锅店”，它们通常是品牌或品类，不是区域，不要输出 in_area 或 region_ranked。
+4. keywords 必须非空；品牌词要提取为纯品牌名，生活语义要改写成业态词。
 
 请输出地图搜索意图 JSON。"""
 
