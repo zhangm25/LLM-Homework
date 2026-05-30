@@ -7,8 +7,10 @@ IntentObject so the current scheduler can keep doing time/route planning.
 
 from __future__ import annotations
 
+import json
 from typing import Optional
 
+from ..debug_log import write_debug_log
 from ..llm.vocab import TASK_DEFAULT_KEYWORD
 from ..models.intent import ExplicitPOI, IntentObject, Task
 from ..models.place import PlaceCandidate, PlaceResolution, PlaceSlot
@@ -26,6 +28,37 @@ from ..planner.scheduler import (
 )
 from ..tools.amap_client import POI
 from .place_norm import normalize_place_name
+
+
+def _poi_debug(poi: POI) -> dict:
+    return {
+        "id": poi.id,
+        "name": poi.name,
+        "address": poi.address,
+        "location": poi.location,
+        "type": poi.type,
+        "distance_m": poi.distance_m,
+        "rating": poi.rating,
+        "cost": poi.cost,
+    }
+
+
+def _candidate_debug(candidate: PlaceCandidate | None) -> dict | None:
+    return candidate.model_dump() if candidate else None
+
+
+def _log_place_resolution(label: str, **data) -> None:
+    safe = {}
+    for key, value in data.items():
+        if hasattr(value, "model_dump"):
+            safe[key] = value.model_dump()
+        else:
+            safe[key] = value
+    write_debug_log(
+        f"========== PLACE RESOLUTION [{label}] ==========\n"
+        f"{json.dumps(safe, ensure_ascii=False, default=str, indent=2)[:12000]}\n"
+        f"========== END PLACE RESOLUTION [{label}] =========="
+    )
 
 
 def _candidate(poi: POI) -> PlaceCandidate:
@@ -76,11 +109,30 @@ def _match_explicit(intent: IntentObject, place: str) -> Optional[ExplicitPOI]:
 
 
 async def _resolve_named_slot(slot: PlaceSlot) -> PlaceSlot:
+    _log_place_resolution(
+        "search:named_slot:start",
+        slot_id=slot.id,
+        role=slot.role,
+        source_text=slot.source_text,
+        query=slot.query,
+        city=slot.city,
+        strategy="named_text_search",
+    )
     pois = await _resolve_named(slot.query, slot.city)
     slot.candidates = [_candidate(p) for p in pois[:5]]
     slot.selected = slot.candidates[0] if slot.candidates else None
     slot.status = _slot_status(slot.candidates)
     slot.needs_user_choice = len(slot.candidates) > 1
+    _log_place_resolution(
+        "search:named_slot:result",
+        slot_id=slot.id,
+        role=slot.role,
+        query=slot.query,
+        candidates=[_poi_debug(p) for p in pois[:5]],
+        selected=_candidate_debug(slot.selected),
+        status=slot.status,
+        needs_user_choice=slot.needs_user_choice,
+    )
     return slot
 
 
@@ -115,6 +167,13 @@ async def _next_anchor_location(
         if cands:
             return cands[0].location
     return None
+
+
+def _target_debug(place: Optional[str], task: Optional[Task]) -> dict:
+    return {
+        "place": place,
+        "task": task.model_dump() if task else None,
+    }
 
 
 def _unique_anchors(*anchors: Optional[list[float]]) -> list[list[float]]:
@@ -201,16 +260,29 @@ async def resolve_place_slots(
 
     prev_loc = start.location or origin or CITY_CENTER.get(city, CITY_CENTER[DEFAULT_CITY])
     targets = _grounding_targets(intent)
+    _log_place_resolution(
+        "start",
+        city=city,
+        origin=origin,
+        initial_prev_loc=prev_loc,
+        targets=[_target_debug(place, task) for place, task in targets],
+    )
     for target_i, (place, task) in enumerate(targets):
         category = _venue_category(task)
         if place and category and not _place_should_be_main_destination(place):
+            strategy = "area_around_search_first"
             raw = await _resolve_in_area(place, category, city)
             query = f"{place} {category}"
             role = "activity_poi"
+            anchors = []
+            anchor_note = f"先定位区域「{place}」，再在区域周边搜索「{category}」；无结果才退回文本搜索。"
         elif place:
+            strategy = "named_text_search"
             raw = await _resolve_named(place, city)
             query = place
             role = "waypoint"
+            anchors = []
+            anchor_note = "明确地点，按名称检索真实 POI。"
         else:
             query = (
                 category
@@ -220,11 +292,30 @@ async def resolve_place_slots(
             if _is_route_anchored_activity(task, category):
                 next_loc = await _next_anchor_location(targets, target_i, intent, city)
                 anchors = _unique_anchors(prev_loc, next_loc)
+                strategy = "route_anchor_around_search"
+                anchor_note = "餐饮/咖啡/茶等路线型模糊任务，强制围绕上一站和下一站锚点周边搜索。"
                 raw = await _resolve_near_anchors(query, anchors, city) if anchors else await _resolve_near(query, prev_loc, city)
             else:
+                anchors = _unique_anchors(prev_loc)
+                strategy = "previous_anchor_around_search"
+                anchor_note = "普通模糊活动，围绕上一站周边搜索。"
                 raw = await _resolve_near(query, prev_loc, city)
             role = "activity_poi"
 
+        _log_place_resolution(
+            "search:activity:result",
+            slot_index=target_i + 1,
+            role=role,
+            source_text=place or (task.intent if task else query) or query,
+            query=query,
+            category=category,
+            city=city,
+            strategy=strategy,
+            anchor_location=prev_loc,
+            route_anchors=anchors,
+            note=anchor_note,
+            candidates=[_poi_debug(p) for p in raw[:5]],
+        )
         slot = PlaceSlot(
             id=next_id(),
             role=role,
@@ -247,7 +338,15 @@ async def resolve_place_slots(
                     _apply_to_explicit(explicit, slot.selected)
             prev_loc = slot.selected.location
         slots.append(slot)
+        _log_place_resolution(
+            "slot:selected",
+            slot=slot,
+            selected=_candidate_debug(slot.selected),
+            next_prev_loc=prev_loc,
+        )
 
     resolved = sum(1 for s in slots if s.status == "selected")
     status = "places_ready" if slots and resolved == len(slots) else "partial" if resolved else "unresolved"
-    return PlaceResolution(status=status, slots=slots)
+    resolution = PlaceResolution(status=status, slots=slots)
+    _log_place_resolution("done", status=status, resolution=resolution)
+    return resolution
