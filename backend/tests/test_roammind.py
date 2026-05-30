@@ -1101,6 +1101,45 @@ async def check_llm_cannot_unlock_chain_brand_from_around_scope():
     assert intent.type_codes == ["050000"]
 
 
+async def check_llm_exact_sightseeing_place_is_not_downgraded_to_around():
+    class GoodLLM:
+        enabled = True
+
+        async def complete_json(self, system, user, temperature=None, stage="json"):
+            return {
+                "raw_need": "天安门",
+                "search_category": "sightseeing",
+                "search_scope": "exact_place",
+                "anchor_policy": "none",
+                "ranking_policy": "relevance",
+                "keywords": ["天安门"],
+                "type_codes": ["110000"],
+                "radius_m": 3000,
+                "fallback_radius_m": 8000,
+                "reason": "用户直接指定了唯一明确POI'天安门'，属于exact_place，无需周边或路线搜索。",
+            }
+
+    old = search_intent_mod.get_llm
+    search_intent_mod.get_llm = lambda: GoodLLM()
+    try:
+        intent = await build_map_search_intent(
+            task=Task(id="t1", type="sightseeing", intent="参观"),
+            raw_need="天安门",
+            category_hint="天安门",
+            city="北京",
+            mode="named_or_fuzzy_place",
+            anchors=[[116.20, 39.90]],
+            anchor_context=[{"role": "previous", "label": "上一站", "location": [116.20, 39.90]}],
+            place="天安门",
+        )
+    finally:
+        search_intent_mod.get_llm = old
+    assert intent.search_scope == "exact_place"
+    assert intent.anchor_policy == "none"
+    assert intent.keywords == ["天安门"]
+    assert intent.type_codes == ["110000"]
+
+
 async def check_llm_shopping_keywords_are_not_overwritten_by_fallback():
     class GoodLLM:
         enabled = True
@@ -1322,6 +1361,7 @@ CHECKS = [
     check_chain_brand_place_uses_around_scope,
     check_chain_brand_with_task_is_not_treated_as_area,
     check_llm_cannot_unlock_chain_brand_from_around_scope,
+    check_llm_exact_sightseeing_place_is_not_downgraded_to_around,
     check_llm_shopping_keywords_are_not_overwritten_by_fallback,
     check_ranked_hotpot_uses_region_search_not_around,
     check_scenic_relax_uses_ranked_region_search,

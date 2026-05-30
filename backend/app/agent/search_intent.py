@@ -203,8 +203,6 @@ def _looks_exact_place(text: str, task: Optional[Task], mode: str) -> bool:
     if mode != "named_or_fuzzy_place":
         return False
     haystack = text or ""
-    if task is not None:
-        return False
     if _has_any(haystack, AROUND_CUES + RANKED_CUES + CHAIN_OR_CATEGORY_TERMS):
         return False
     if any(token in haystack for token in ("门", "校区", "公园", "大学", "酒店", "大厦", "购物中心", "地铁站")):
