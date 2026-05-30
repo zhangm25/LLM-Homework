@@ -41,6 +41,8 @@ from app.agent.pipeline import (  # noqa: E402
     _allow_nonblocking_llm_clarification,
 )
 from app.agent.place_resolution import resolve_place_slots  # noqa: E402
+import app.agent.search_intent as search_intent_mod  # noqa: E402
+from app.agent.search_intent import build_map_search_intent  # noqa: E402
 from app.tools.file_parser import parse_attachment  # noqa: E402
 
 
@@ -921,6 +923,80 @@ async def check_chain_brand_place_uses_around_scope():
     assert not any(call[0] == "麦当劳" for call in fake.text_calls), fake.text_calls
 
 
+async def check_chain_brand_with_task_is_not_treated_as_area():
+    class TrackingAMap(FakeAMap):
+        def __init__(self):
+            super().__init__()
+            self.text_calls = []
+            self.around_calls = []
+
+        async def search_poi_text(self, keywords, region=None, types=None, page_size=10):
+            self.text_calls.append((keywords, region, types))
+            if keywords == "麦当劳":
+                return [_poi("麦当劳远店", [116.80, 39.90], rating=4.2)]
+            return [_poi(keywords, _hash_loc(keywords))]
+
+        async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                    sortrule="weight", page_size=10):
+            self.around_calls.append((keywords, list(location), radius_m, types))
+            return [_poi("麦当劳近店", [location[0] + 0.001, location[1]], rating=4.6)]
+
+    fake = TrackingAMap()
+    sch.get_amap = lambda: fake
+    intent = IntentObject(
+        constraints=Constraints(start=Endpoint(type="current", location=[116.20, 39.90], source="geolocation")),
+        explicit_pois=[ExplicitPOI(name="麦当劳", fixed_order_index=0)],
+        tasks=[Task(id="t1", type="dining", intent="吃饭", at="麦当劳", dwell_min=40, explicit=True)],
+    )
+    resolution = await resolve_place_slots(intent, [116.20, 39.90], "北京")
+    slot = resolution.slots[-1]
+    assert slot.selected and slot.selected.name == "麦当劳近店"
+    assert slot.around is True and slot.search_scope == "around_route"
+    assert ("麦当劳", [116.20, 39.90], 3000, "050000") in fake.around_calls
+    assert ("麦当劳 餐厅", "北京", "050000") not in fake.text_calls
+
+
+async def check_llm_cannot_unlock_chain_brand_from_around_scope():
+    class BadLLM:
+        enabled = True
+
+        async def complete_json(self, system, user, temperature=None, stage="json"):
+            return {
+                "raw_need": "找家麦当劳",
+                "search_category": "generic",
+                "search_scope": "region_ranked",
+                "anchor_policy": "none",
+                "ranking_policy": "rating_then_relevance",
+                "keywords": [],
+                "type_codes": [],
+                "radius_m": 3000,
+                "fallback_radius_m": 8000,
+                "reason": "bad broad choice",
+            }
+
+    old = search_intent_mod.get_llm
+    search_intent_mod.get_llm = lambda: BadLLM()
+    try:
+        intent = await build_map_search_intent(
+            task=Task(id="t1", type="dining", intent="找家麦当劳"),
+            raw_need="找家麦当劳",
+            category_hint="麦当劳",
+            city="北京",
+            mode="route_anchor_around",
+            anchors=[[116.20, 39.90], [116.30, 39.90]],
+            anchor_context=[
+                {"role": "previous", "label": "上一站", "location": [116.20, 39.90]},
+                {"role": "next", "label": "下一站", "location": [116.30, 39.90]},
+            ],
+        )
+    finally:
+        search_intent_mod.get_llm = old
+    assert intent.search_scope == "around_route"
+    assert intent.anchor_policy == "prev_next"
+    assert intent.keywords == ["麦当劳"]
+    assert intent.type_codes == ["050000"]
+
+
 async def check_ranked_hotpot_uses_region_search_not_around():
     class TrackingAMap(FakeAMap):
         def __init__(self):
@@ -1096,6 +1172,8 @@ CHECKS = [
     check_dining_between_fixed_events_uses_meeting_anchors,
     check_lunch_search_is_normalized_before_amap,
     check_chain_brand_place_uses_around_scope,
+    check_chain_brand_with_task_is_not_treated_as_area,
+    check_llm_cannot_unlock_chain_brand_from_around_scope,
     check_ranked_hotpot_uses_region_search_not_around,
     check_scenic_relax_uses_ranked_region_search,
     check_dining_does_not_use_end_before_future_vague_task,

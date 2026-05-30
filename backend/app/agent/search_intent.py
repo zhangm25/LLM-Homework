@@ -143,7 +143,7 @@ class MapSearchIntent(BaseModel):
 
 def _strip_need(text: str) -> str:
     s = (text or "").strip()
-    for prefix in ("顺路去个", "顺路去", "找一家", "找家", "吃个", "吃点", "喝个", "喝点", "找个", "看看", "去", "到", "吃", "喝", "找", "逛"):
+    for prefix in ("顺路去个", "顺路去", "附近的", "附近", "找一家", "找家", "找一个", "吃个", "吃点", "喝个", "喝点", "找个", "看看", "去", "到", "吃", "喝", "找", "逛"):
         if s.startswith(prefix):
             s = s[len(prefix):]
             break
@@ -153,6 +153,14 @@ def _strip_need(text: str) -> str:
 def _has_any(text: str, tokens: tuple[str, ...]) -> bool:
     lowered = text.lower()
     return any(token.lower() in lowered for token in tokens)
+
+
+def _first_token(text: str, tokens: tuple[str, ...]) -> Optional[str]:
+    lowered = text.lower()
+    for token in tokens:
+        if token.lower() in lowered:
+            return token.upper() if token.lower() == "kfc" else token
+    return None
 
 
 def _scope_for_need(haystack: str, mode: str) -> tuple[SearchScope, AnchorPolicy, RankingPolicy]:
@@ -167,6 +175,28 @@ def _scope_for_need(haystack: str, mode: str) -> tuple[SearchScope, AnchorPolicy
     if mode == "route_anchor_around":
         return "around_route", "prev_next", "route_detour_then_distance"
     return "around_anchor", "prev", "distance_then_rating"
+
+
+def _scope_is_locally_locked(fallback: MapSearchIntent) -> bool:
+    """Some scopes are deterministic safety rules, not LLM preferences.
+
+    Brand chains, category shops and explicit nearby/route wording must stay
+    around-anchored even if the model suggests a broad region search.
+    """
+    text = fallback.raw_need or ""
+    return (
+        fallback.search_scope in {"around_anchor", "around_route", "in_area"}
+        and (
+            _has_any(text, AROUND_CUES)
+            or _has_any(text, CHAIN_OR_CATEGORY_TERMS)
+            or "chain normalization" in fallback.reason
+            or "nearby shopping/service" in fallback.reason
+        )
+    )
+
+
+def looks_like_chain_or_category_place(text: Optional[str]) -> bool:
+    return _has_any(text or "", CHAIN_OR_CATEGORY_TERMS)
 
 
 def _looks_exact_place(text: str, task: Optional[Task], mode: str) -> bool:
@@ -216,7 +246,7 @@ def _local_search_intent(task: Optional[Task], raw_need: str, category_hint: Opt
             search_scope=scope,
             anchor_policy=anchor_policy,
             ranking_policy=ranking_policy,
-            keywords=[text or raw_need],
+            keywords=[_first_token(haystack, FOOD_CHAIN_TERMS) or text or raw_need],
             type_codes=["050000"],
             radius_m=3000,
             fallback_radius_m=8000,
@@ -230,7 +260,7 @@ def _local_search_intent(task: Optional[Task], raw_need: str, category_hint: Opt
             search_scope=scope,
             anchor_policy=anchor_policy,
             ranking_policy=ranking_policy,
-            keywords=[text or raw_need],
+            keywords=[_first_token(haystack, COFFEE_CHAIN_TERMS) or text or raw_need],
             type_codes=["050000"],
             radius_m=3000,
             fallback_radius_m=8000,
@@ -359,6 +389,24 @@ def _validate_llm_intent(data: dict, fallback: MapSearchIntent) -> MapSearchInte
         intent.anchor_policy = fallback.anchor_policy
         intent.ranking_policy = fallback.ranking_policy
         intent.source = "llm_with_fallback"
+    if _scope_is_locally_locked(fallback) and intent.search_scope != fallback.search_scope:
+        intent.search_category = fallback.search_category
+        intent.search_scope = fallback.search_scope
+        intent.anchor_policy = fallback.anchor_policy
+        intent.ranking_policy = fallback.ranking_policy
+        intent.source = "llm_with_fallback"
+        intent.reason = f"{intent.reason}; backend locked scope: {fallback.reason}".strip("; ")
+    if _scope_is_locally_locked(fallback) and (
+        "chain normalization" in fallback.reason or "nearby shopping/service" in fallback.reason
+    ):
+        intent.search_category = fallback.search_category
+        intent.keywords = fallback.keywords
+        intent.source = "llm_with_fallback"
+    if fallback.type_codes and (
+        intent.search_category == fallback.search_category
+        or _scope_is_locally_locked(fallback)
+    ):
+        intent.type_codes = fallback.type_codes
     intent.radius_m = max(500, min(intent.radius_m or fallback.radius_m, 50_000))
     intent.fallback_radius_m = max(intent.radius_m, min(intent.fallback_radius_m or fallback.fallback_radius_m, 50_000))
     return intent
@@ -416,7 +464,10 @@ SEARCH_INTENT_USER = """最小相关上下文：
 - 用户任务原文：{raw_need}
 - 后端已有类别提示：{category_hint}
 - 搜索模式：{mode}
+- 路线锚点：{anchor_context}
 - 锚点坐标：{anchors}
+
+说明：路线锚点中的 role=previous 表示上一站，role=next 表示下一站，role=area 表示命名区域中心。若用户说“附近/顺路/路上/找家品牌或品类店”，应优先 around_anchor 或 around_route，不要输出 region_ranked。
 
 请输出地图搜索意图 JSON。"""
 
@@ -428,6 +479,7 @@ async def build_map_search_intent(
     city: str,
     mode: str,
     anchors: list[list[float]] | None = None,
+    anchor_context: list[dict] | None = None,
     place: Optional[str] = None,
 ) -> MapSearchIntent:
     fallback = _local_search_intent(task, raw_need, category_hint, mode)
@@ -443,6 +495,7 @@ async def build_map_search_intent(
         raw_need=raw_need,
         category_hint=category_hint or "",
         mode=mode,
+        anchor_context=json.dumps(anchor_context or [], ensure_ascii=False),
         anchors=anchors or [],
     )
     try:

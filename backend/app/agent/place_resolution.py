@@ -33,7 +33,7 @@ from ..planner.scheduler import (
 )
 from ..tools.amap_client import POI
 from .place_norm import normalize_place_name
-from .search_intent import MapSearchIntent, build_map_search_intent
+from .search_intent import MapSearchIntent, build_map_search_intent, looks_like_chain_or_category_place
 
 
 def _poi_debug(poi: POI) -> dict:
@@ -242,6 +242,24 @@ def _unique_anchors(*anchors: Optional[list[float]]) -> list[list[float]]:
     return out
 
 
+def _anchor_context(
+    previous: Optional[list[float]],
+    next_anchor: Optional[list[float]] = None,
+    previous_label: str = "上一站",
+    next_label: str = "下一站",
+) -> list[dict]:
+    out: list[dict] = []
+    if previous:
+        out.append({"role": "previous", "label": previous_label, "location": previous})
+    if next_anchor and not any(
+        abs(next_anchor[0] - item["location"][0]) < 0.000001
+        and abs(next_anchor[1] - item["location"][1]) < 0.000001
+        for item in out
+    ):
+        out.append({"role": "next", "label": next_label, "location": next_anchor})
+    return out
+
+
 def _around_enabled(search_intent: Optional[MapSearchIntent]) -> bool:
     return bool(search_intent and search_intent.search_scope in {"around_anchor", "around_route", "in_area"})
 
@@ -355,6 +373,7 @@ async def resolve_place_slots(
     targets = _grounding_targets(intent)
     target_contexts = [_target_context(task, fixed) for _, task in targets]
     context_prev: dict[ContextKey, list[float]] = {}
+    context_prev_label: dict[ContextKey, str] = {}
     named_cache: dict[str, list[POI]] = {}
     _log_place_resolution(
         "start",
@@ -369,8 +388,10 @@ async def resolve_place_slots(
         category = _venue_category(task)
         context = target_contexts[target_i]
         prev_loc = context_prev.get(context) or _context_start_location(context, fixed, start_loc)
+        prev_label = context_prev_label.get(context) or ("上一固定日程" if context[0] in {"between", "after_fixed"} and fixed else "起点")
         search_intent = None
-        if place and category and not _place_should_be_main_destination(place):
+        anchors_detail: list[dict] = []
+        if place and category and not _place_should_be_main_destination(place) and not looks_like_chain_or_category_place(place):
             strategy = "area_around_search_first"
             search_intent = await build_map_search_intent(
                 task=task,
@@ -379,6 +400,7 @@ async def resolve_place_slots(
                 city=city,
                 mode="area_around",
                 anchors=[],
+                anchor_context=[{"role": "area", "label": place}],
                 place=place,
             )
             query = search_intent.keyword_param or category
@@ -404,6 +426,7 @@ async def resolve_place_slots(
                 named_cache,
             )
             anchors = _unique_anchors(prev_loc, next_loc)
+            anchors_detail = _anchor_context(prev_loc, next_loc, prev_label, "下一站")
             raw_need = f"{place} {task.intent if task else ''}".strip()
             search_intent = await build_map_search_intent(
                 task=task,
@@ -412,6 +435,7 @@ async def resolve_place_slots(
                 city=city,
                 mode="named_or_fuzzy_place",
                 anchors=anchors,
+                anchor_context=anchors_detail,
                 place=place,
             )
             if search_intent.search_scope == "exact_place":
@@ -448,6 +472,8 @@ async def resolve_place_slots(
                 anchors = _unique_anchors(prev_loc, next_loc)
             else:
                 anchors = _unique_anchors(prev_loc)
+                next_loc = None
+            anchors_detail = _anchor_context(prev_loc, next_loc, prev_label, "下一站")
             search_intent = await build_map_search_intent(
                 task=task,
                 raw_need=task.intent if task else raw_query,
@@ -455,6 +481,7 @@ async def resolve_place_slots(
                 city=city,
                 mode="route_anchor_around" if _is_route_anchored_activity(task, category) else "previous_anchor_around",
                 anchors=anchors,
+                anchor_context=anchors_detail,
             )
             query = search_intent.keyword_param or raw_query
             if search_intent.search_scope in {"citywide_ranked", "region_ranked"}:
@@ -514,6 +541,7 @@ async def resolve_place_slots(
             schedule_context=context,
             anchor_location=prev_loc,
             route_anchors=anchors,
+            route_anchor_context=anchors_detail,
             around=_around_enabled(search_intent),
             note=anchor_note,
             candidates=[_poi_debug(p) for p in raw[:5]],
@@ -543,6 +571,7 @@ async def resolve_place_slots(
                 if explicit:
                     _apply_to_explicit(explicit, slot.selected)
             context_prev[context] = slot.selected.location
+            context_prev_label[context] = slot.selected.name
         slots.append(slot)
         _log_place_resolution(
             "slot:selected",
