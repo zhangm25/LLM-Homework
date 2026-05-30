@@ -213,6 +213,14 @@ def _transport(value) -> str:
     return "auto"
 
 
+def _is_return_segment(task: str) -> bool:
+    """A return leg is an endpoint constraint, not another stop to schedule."""
+    text = (task or "").strip()
+    if not text:
+        return False
+    return text.startswith(("回到", "返回", "回家", "回住处", "回宿舍", "回酒店", "回公寓", "回"))
+
+
 def _intent_from_segments(data: dict) -> IntentObject:
     start_data = data.get("start") or {}
     end_data = data.get("end") or {}
@@ -232,6 +240,10 @@ def _intent_from_segments(data: dict) -> IntentObject:
             "pickup", "meeting", "commute", "other",
         }:
             task_type = "other"
+        if _is_return_segment(task):
+            if place and not end_place:
+                end_place = place
+            continue
         place_for_task = place if place and place != end_place else None
         if place_for_task:
             explicit_pois.append(ExplicitPOI(name=place, fixed_order_index=len(explicit_pois)))

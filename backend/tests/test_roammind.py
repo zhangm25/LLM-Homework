@@ -38,7 +38,7 @@ from app.models.plan import ChatRequest, GeoPoint  # noqa: E402
 from app.agent.pipeline import (  # noqa: E402
     plan_stream, _is_plannable, _not_plannable_question, _merge_patch, _anchor_count,
     _extract_intent, _complete_pending_intent_llm, _apply_origin_to_start,
-    _allow_nonblocking_llm_clarification,
+    _allow_nonblocking_llm_clarification, _intent_from_segments,
 )
 from app.agent.place_resolution import resolve_place_slots  # noqa: E402
 import app.agent.search_intent as search_intent_mod  # noqa: E402
@@ -677,6 +677,31 @@ def check_origin_label_preserves_full_start_address():
     assert updated.constraints.start.location == [116.326, 40.006]
 
 
+def check_return_segment_becomes_end_not_task():
+    raw = {
+        "is_available": True,
+        "city": "北京",
+        "start": {"place": "清华大学紫荆宿舍", "transport_hint": None},
+        "end": None,
+        "segments": [
+            {"place": "生鲜超市", "task_type": "shopping", "task": "买点东西"},
+            {"place": "麦当劳", "task_type": "dining", "task": "吃饭"},
+            {"place": "清华大学紫荆宿舍", "task_type": "other", "task": "回到宿舍"},
+        ],
+        "mood": None,
+        "vibe_tags": [],
+        "avoid_tags": [],
+        "date": "today",
+        "time_window": {"start": None, "end": None},
+        "fixed_events": [],
+        "clarification_needed": [],
+    }
+    intent = _intent_from_segments(raw)
+    assert intent.constraints.end and intent.constraints.end.value == "清华大学紫荆宿舍"
+    assert [p.name for p in intent.explicit_pois] == ["生鲜超市", "麦当劳"]
+    assert [(t.at, t.intent) for t in intent.tasks] == [("生鲜超市", "买点东西"), ("麦当劳", "吃饭")]
+
+
 async def check_named_hotel_end_does_not_clarify():
     # A full hotel POI name is navigable; don't confuse it with "the hotel in Wangjing".
     types, _ = await _stream_types("下午先去南锣鼓巷逛逛，晚上回北京望京凯悦酒店")
@@ -1212,6 +1237,7 @@ CHECKS = [
     check_ambiguous_end_offers_origin_guess, check_current_start_unknown_clarifies,
     check_clarify_answer_completes_prior_intent, check_p1_clarify_accepts_internal_intent_schema,
     check_origin_label_preserves_full_start_address,
+    check_return_segment_becomes_end_not_task,
     check_school_endpoint_choice_clarify, check_school_start_choice_clarify,
     check_geolocated_school_start_does_not_clarify,
     check_place_resolution_fills_vague_task_before_planning,
