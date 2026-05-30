@@ -23,7 +23,7 @@ export default function PlanPanel({
   const slots = plan?.place_resolution?.slots?.filter((slot) => slot.selected || slot.candidates.length) ?? [];
   const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
   const activeSlot = useMemo(
-    () => slots.find((slot) => slot.id === activeSlotId) ?? slots[0] ?? null,
+    () => slots.find((slot) => slot.id === activeSlotId) ?? null,
     [activeSlotId, slots],
   );
   const candidateFocus =
@@ -70,8 +70,9 @@ export default function PlanPanel({
           </div>
           <PlaceResolutionSummary
             resolution={plan.place_resolution ?? null}
-            activeSlotId={activeSlot?.id ?? null}
-            onSelectSlot={setActiveSlotId}
+            activeSlotId={activeSlotId}
+            onShowRoute={() => setActiveSlotId(null)}
+            onToggleSlot={(slotId) => setActiveSlotId((current) => (current === slotId ? null : slotId))}
             onPickCandidate={onPickPlaceCandidate}
           />
           <Timeline
@@ -105,12 +106,14 @@ export default function PlanPanel({
 function PlaceResolutionSummary({
   resolution,
   activeSlotId,
-  onSelectSlot,
+  onShowRoute,
+  onToggleSlot,
   onPickCandidate,
 }: {
   resolution: PlaceResolution | null;
   activeSlotId: string | null;
-  onSelectSlot: (slotId: string) => void;
+  onShowRoute: () => void;
+  onToggleSlot: (slotId: string) => void;
   onPickCandidate?: (slotId: string, candidate: PlaceCandidate) => void;
 }) {
   const slots = resolution?.slots?.filter((slot) => slot.selected || slot.candidates.length) ?? [];
@@ -119,12 +122,17 @@ function PlaceResolutionSummary({
     <div className="place-summary" aria-label="已确定地点">
       <div className="place-summary-head">
         <span>地点确认</span>
-        <small>{resolution?.status === "places_ready" ? "已就绪" : "部分待确认"}</small>
+        <div className="place-summary-actions">
+          <button className={`route-view-btn${activeSlotId ? "" : " active"}`} type="button" onClick={onShowRoute}>
+            显示行程
+          </button>
+          <small>{resolution?.status === "places_ready" ? "已就绪" : "部分待确认"}</small>
+        </div>
       </div>
       <div className="place-slots">
         {slots.map((slot) => (
           <div className={`place-slot${slot.id === activeSlotId ? " active" : ""}`} key={slot.id}>
-            <button className="place-slot-main" type="button" onClick={() => onSelectSlot(slot.id)}>
+            <button className="place-slot-main" type="button" onClick={() => onToggleSlot(slot.id)}>
               <span className="place-role">{roleLabel(slot.role)}</span>
               <span className="place-main" title={slot.selected?.address || slot.selected?.name || slot.query}>
                 {slot.selected?.name || slot.query}
