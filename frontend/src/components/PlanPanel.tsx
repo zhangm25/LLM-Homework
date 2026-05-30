@@ -20,7 +20,7 @@ export default function PlanPanel({
   onPickPlaceCandidate?: (slotId: string, candidate: PlaceCandidate) => void;
   swappingIndex?: number | null;
 }) {
-  const slots = plan?.place_resolution?.slots?.filter((slot) => slot.selected || slot.candidates.length) ?? [];
+  const slots = useMemo(() => orderedPlaceSlots(plan), [plan]);
   const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
   const activeSlot = useMemo(
     () => slots.find((slot) => slot.id === activeSlotId) ?? null,
@@ -69,7 +69,8 @@ export default function PlanPanel({
             />
           </div>
           <PlaceResolutionSummary
-            resolution={plan.place_resolution ?? null}
+            status={plan.place_resolution?.status ?? null}
+            slots={slots}
             activeSlotId={activeSlotId}
             onShowRoute={() => setActiveSlotId(null)}
             onToggleSlot={(slotId) => setActiveSlotId((current) => (current === slotId ? null : slotId))}
@@ -104,19 +105,20 @@ export default function PlanPanel({
 }
 
 function PlaceResolutionSummary({
-  resolution,
+  status,
+  slots,
   activeSlotId,
   onShowRoute,
   onToggleSlot,
   onPickCandidate,
 }: {
-  resolution: PlaceResolution | null;
+  status: PlaceResolution["status"] | null;
+  slots: PlaceSlot[];
   activeSlotId: string | null;
   onShowRoute: () => void;
   onToggleSlot: (slotId: string) => void;
   onPickCandidate?: (slotId: string, candidate: PlaceCandidate) => void;
 }) {
-  const slots = resolution?.slots?.filter((slot) => slot.selected || slot.candidates.length) ?? [];
   if (!slots.length) return null;
   return (
     <div className="place-summary" aria-label="已确定地点">
@@ -126,7 +128,7 @@ function PlaceResolutionSummary({
           <button className={`route-view-btn${activeSlotId ? "" : " active"}`} type="button" onClick={onShowRoute}>
             显示行程
           </button>
-          <small>{resolution?.status === "places_ready" ? "已就绪" : "部分待确认"}</small>
+          <small>{status === "places_ready" ? "已就绪" : "部分待确认"}</small>
         </div>
       </div>
       <div className="place-slots">
@@ -195,4 +197,63 @@ function roleLabel(role: string) {
     default:
       return "地点";
   }
+}
+
+function orderedPlaceSlots(plan: Plan | null) {
+  const slots = plan?.place_resolution?.slots?.filter((slot) => slot.selected || slot.candidates.length) ?? [];
+  if (!plan) return slots;
+  return slots
+    .map((slot, originalIndex) => ({
+      slot,
+      originalIndex,
+      timelineIndex: placeSlotTimelineIndex(plan, slot, originalIndex),
+    }))
+    .sort((a, b) => a.timelineIndex - b.timelineIndex || a.originalIndex - b.originalIndex)
+    .map((item) => item.slot);
+}
+
+function placeSlotTimelineIndex(plan: Plan, slot: PlaceSlot, fallback: number) {
+  const exact = plan.timeline.findIndex((stop) => stopMatchesSlot(stop, slot));
+  if (exact >= 0) return exact;
+
+  if (slot.role === "start") {
+    const start = plan.timeline.findIndex((stop) => stop.kind === "start");
+    return start >= 0 ? start : -1;
+  }
+  if (slot.role === "end") {
+    const end = plan.timeline.findIndex((stop) => stop.kind === "end");
+    return end >= 0 ? end : plan.timeline.length + fallback;
+  }
+  if (slot.role === "fixed") {
+    const fixed = plan.timeline.findIndex((stop) => stop.kind === "fixed");
+    return fixed >= 0 ? fixed : plan.timeline.length + fallback;
+  }
+  return plan.timeline.length + fallback;
+}
+
+function stopMatchesSlot(stop: Plan["timeline"][number], slot: PlaceSlot) {
+  if (slot.role === "start" && stop.kind !== "start") return false;
+  if (slot.role === "end" && stop.kind !== "end") return false;
+  if (slot.role === "fixed" && stop.kind !== "fixed") return false;
+  if ((slot.role === "waypoint" || slot.role === "activity_poi") && stop.kind !== "poi") return false;
+
+  const selected = slot.selected;
+  if (sameLocation(stop.location, selected?.location)) return true;
+
+  const stopName = stripReturnPrefix(stop.name);
+  const selectedName = selected?.name ?? "";
+  const query = slot.query || slot.source_text;
+  return Boolean(
+    (selectedName && (stopName === selectedName || stopName.includes(selectedName) || selectedName.includes(stopName))) ||
+      (query && (stopName === query || stopName.includes(query) || query.includes(stopName))),
+  );
+}
+
+function sameLocation(a?: [number, number] | null, b?: [number, number] | null) {
+  if (!a || !b) return false;
+  return Math.abs(a[0] - b[0]) < 0.000001 && Math.abs(a[1] - b[1]) < 0.000001;
+}
+
+function stripReturnPrefix(name: string) {
+  return name.replace(/^回\s*/, "");
 }
