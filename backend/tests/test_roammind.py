@@ -997,6 +997,47 @@ async def check_llm_cannot_unlock_chain_brand_from_around_scope():
     assert intent.type_codes == ["050000"]
 
 
+async def check_llm_shopping_keywords_are_not_overwritten_by_fallback():
+    class GoodLLM:
+        enabled = True
+
+        async def complete_json(self, system, user, temperature=None, stage="json"):
+            return {
+                "raw_need": "生鲜超市 买点东西",
+                "search_category": "shopping",
+                "search_scope": "around_route",
+                "anchor_policy": "prev_next",
+                "ranking_policy": "route_detour_then_distance",
+                "keywords": ["生鲜超市", "超市", "便利店"],
+                "type_codes": ["060000"],
+                "radius_m": 3000,
+                "fallback_radius_m": 8000,
+                "reason": "keywords extracted as POI terms",
+            }
+
+    old = search_intent_mod.get_llm
+    search_intent_mod.get_llm = lambda: GoodLLM()
+    try:
+        intent = await build_map_search_intent(
+            task=Task(id="t1", type="shopping", intent="买点东西"),
+            raw_need="生鲜超市 买点东西",
+            category_hint="生鲜超市 买点东西",
+            city="北京",
+            mode="route_anchor_around",
+            anchors=[[116.329398, 40.011394], [116.33, 40.01]],
+            anchor_context=[
+                {"role": "previous", "label": "上一站", "location": [116.329398, 40.011394]},
+                {"role": "next", "label": "下一站", "location": [116.33, 40.01]},
+            ],
+        )
+    finally:
+        search_intent_mod.get_llm = old
+    assert intent.search_scope == "around_route"
+    assert intent.keywords == ["生鲜超市", "超市", "便利店"]
+    assert intent.keyword_param == "生鲜超市|超市|便利店"
+    assert "买点东西" not in intent.keyword_param
+
+
 async def check_ranked_hotpot_uses_region_search_not_around():
     class TrackingAMap(FakeAMap):
         def __init__(self):
@@ -1174,6 +1215,7 @@ CHECKS = [
     check_chain_brand_place_uses_around_scope,
     check_chain_brand_with_task_is_not_treated_as_area,
     check_llm_cannot_unlock_chain_brand_from_around_scope,
+    check_llm_shopping_keywords_are_not_overwritten_by_fallback,
     check_ranked_hotpot_uses_region_search_not_around,
     check_scenic_relax_uses_ranked_region_search,
     check_dining_does_not_use_end_before_future_vague_task,

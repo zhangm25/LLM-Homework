@@ -396,9 +396,7 @@ def _validate_llm_intent(data: dict, fallback: MapSearchIntent) -> MapSearchInte
         intent.ranking_policy = fallback.ranking_policy
         intent.source = "llm_with_fallback"
         intent.reason = f"{intent.reason}; backend locked scope: {fallback.reason}".strip("; ")
-    if _scope_is_locally_locked(fallback) and (
-        "chain normalization" in fallback.reason or "nearby shopping/service" in fallback.reason
-    ):
+    if _scope_is_locally_locked(fallback) and "chain normalization" in fallback.reason:
         intent.search_category = fallback.search_category
         intent.keywords = fallback.keywords
         intent.source = "llm_with_fallback"
