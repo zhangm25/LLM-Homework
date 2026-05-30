@@ -841,6 +841,44 @@ def _is_plannable(intent: IntentObject) -> bool:
     return bool(intent.explicit_pois or intent.tasks or intent.fixed_events)
 
 
+_NONBLOCKING_CLARIFY_MARKERS = (
+    "哪个具体的地方", "什么具体的地方", "具体去哪", "具体去哪里", "哪家店", "哪家咖啡", "哪家茶",
+    "哪个咖啡馆", "哪个茶馆", "哪个餐厅", "什么餐厅", "餐厅类型", "咖啡馆、茶馆或餐厅",
+)
+_BLOCKING_CLARIFY_MARKERS = (
+    "起点", "出发", "当前位置", "定位", "位置权限", "开启定位", "终点", "回家", "回去",
+    "住处", "酒店", "宿舍", "公司", "校区", "具体地址", "门牌", "小区",
+)
+
+
+def _has_preference_signal(intent: IntentObject) -> bool:
+    prefs = intent.implicit_preferences
+    return bool(prefs.mood or prefs.vibe_tags or prefs.avoid_tags or prefs.desired_categories)
+
+
+def _is_nonblocking_llm_clarification(intent: IntentObject) -> bool:
+    if not intent.clarification_needed or not (_is_plannable(intent) or _has_preference_signal(intent)):
+        return False
+    text = " ".join(intent.clarification_needed)
+    if any(marker in text for marker in _BLOCKING_CLARIFY_MARKERS):
+        return False
+    return any(marker in text for marker in _NONBLOCKING_CLARIFY_MARKERS)
+
+
+def _allow_nonblocking_llm_clarification(intent: IntentObject) -> IntentObject:
+    """Do not let a conservative LLM block fuzzy preference requests.
+
+    "有点累，想找个安静的地方坐坐" is already enough for map candidate search;
+    asking for a concrete shop name belongs to the candidate UI, not P1.
+    """
+    if not intent.is_available and _is_nonblocking_llm_clarification(intent):
+        intent.is_available = True
+        intent.pending_question_type = None
+        intent.pending_field = None
+        intent.clarification_needed = []
+    return intent
+
+
 _DEFAULT_CLARIFY_Q = (
     "我还没听出具体的行程～你想去哪、想做点什么，"
     "或者说说此刻的心情（比如“有点累，想找个安静的地方”），我来帮你安排。"
@@ -1018,6 +1056,7 @@ async def _extract_intent(req: ChatRequest) -> IntentObject:
     if isinstance(req.intent, IntentObject):
         intent = _merge_patch(req.intent, intent, req.message)
     intent = _apply_origin_to_start(req, intent)
+    intent = _allow_nonblocking_llm_clarification(intent)
     _debug_state("extract_intent:done", intent=intent)
     return intent
 

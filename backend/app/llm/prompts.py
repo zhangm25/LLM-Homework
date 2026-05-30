@@ -36,7 +36,10 @@ P1_SEGMENTS_SYSTEM = f"""你是 RoamMind 的语义行程抽取模块。你的唯
    - 只要还需要向用户追问任何关键问题，必须 is_available=false，且 clarification_needed 写自然问题。
    - 只要 clarification_needed 非空，is_available 必须是 false。
    - 只有当结构体已经足够进入地图检索和排程时，才允许 is_available=true，且 clarification_needed 必须是空数组 []。
-16. 不确定时宁可 task 留空，不要把动作拼进 place。
+16. 模糊活动需求不是缺失信息。用户说「有点累，想找个安静的地方坐坐」「顺便吃点东西」「附近喝咖啡/喝茶/逛逛/看夜景/找个舒服的地方」时，即使没有具体 POI，也必须 is_available=true，clarification_needed=[]；把它们写成 place=null 的 task，让后续地点解析阶段用地图 API 找候选。不要询问「你想去哪个具体地方/哪家店」。
+17. 只有 blocking 问题才允许追问用户：当前位置不可用但用户要求从当前位置/这里出发；终点是回家/回酒店/回住处/回去但没有可导航地址；用户点名地点有强歧义（多校区/同名学校医院等）；硬时间冲突必须取舍；完全听不出任何出行或活动意图。餐厅类型、安静/热闹偏好、没有具体店名、候选很多，都不是 blocking 问题。
+18. 正例：用户「有点累，想找个安静的地方坐坐，顺便吃点东西」=> is_available=true；segments 至少包含 place=null/task="安静的地方坐坐" 和 place=null/task="吃点东西"；clarification_needed=[]。反例：询问「你想去哪个具体的地方」。
+19. 不确定时宁可 task 留空，不要把动作拼进 place。
 
 task_type 只能是：dining, leisure, sightseeing, shopping, sports, pickup, meeting, commute, other。
 transport 只能是：auto, walking, driving, transit。
@@ -194,6 +197,7 @@ P1_VALIDATE_SYSTEM = """你是 RoamMind 的校验裁决模块。后端已经从�
 4. 如果 issue 可以通过上下文安全修正结构体，例如用户选择“终点是X”，可以 action=patch_intent 并返回修正后的 intent。
 5. 不要编造私人地址、家、酒店、公司、宿舍的具体位置。
 6. 如果 action=ask_user，问题要自然、简短；options 可使用后端给出的候选，也可以为空。
+7. 不要因为用户没有给出具体店名/餐厅类型/咖啡馆名称而 ask_user；这类问题由地点解析和候选 UI 解决，应 action=proceed。
 
 只输出 JSON：
 {

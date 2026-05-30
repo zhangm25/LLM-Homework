@@ -30,11 +30,13 @@ from app.planner.scheduler import (  # noqa: E402
 from app.tools.amap_client import POI, Leg  # noqa: E402
 from app.models.intent import (  # noqa: E402
     IntentObject, Constraints, Endpoint, Task, FixedEvent, TimeWindow, ExplicitPOI,
+    ImplicitPreferences,
 )
 from app.models.plan import ChatRequest, GeoPoint  # noqa: E402
 from app.agent.pipeline import (  # noqa: E402
     plan_stream, _is_plannable, _not_plannable_question, _merge_patch, _anchor_count,
     _extract_intent, _complete_pending_intent_llm, _apply_origin_to_start,
+    _allow_nonblocking_llm_clarification,
 )
 from app.agent.place_resolution import resolve_place_slots  # noqa: E402
 
@@ -766,6 +768,30 @@ async def check_place_resolution_preserves_precise_current_start():
     assert intent.constraints.start.location == [116.326, 40.004]
 
 
+def check_fuzzy_preference_clarify_is_nonblocking():
+    intent = IntentObject(
+        is_available=False,
+        implicit_preferences=ImplicitPreferences(mood="有点累", vibe_tags=["安静"]),
+        tasks=[
+            Task(id="t1", type="leisure", intent="安静的地方坐坐", dwell_min=70),
+            Task(id="t2", type="dining", intent="吃点东西", dwell_min=60),
+        ],
+        clarification_needed=["你想去哪个具体的地方？比如附近的咖啡馆、茶馆或餐厅。"],
+    )
+    updated = _allow_nonblocking_llm_clarification(intent)
+    assert updated.is_available
+    assert updated.clarification_needed == []
+
+    blocking = IntentObject(
+        is_available=False,
+        tasks=[Task(id="t1", type="leisure", intent="逛逛", dwell_min=60)],
+        clarification_needed=["你说从当前位置出发，但定位不可用。请提供具体起点。"],
+    )
+    still_blocking = _allow_nonblocking_llm_clarification(blocking)
+    assert not still_blocking.is_available
+    assert still_blocking.clarification_needed
+
+
 # --------------------------------------------------------------------------
 # Runner
 # --------------------------------------------------------------------------
@@ -793,6 +819,7 @@ CHECKS = [
     check_geolocated_school_start_does_not_clarify,
     check_place_resolution_fills_vague_task_before_planning,
     check_place_resolution_preserves_precise_current_start,
+    check_fuzzy_preference_clarify_is_nonblocking,
 ]
 
 
