@@ -16,6 +16,7 @@ from typing import Any, Optional
 import httpx
 
 from ..config import get_settings
+from ..debug_log import write_debug_log
 
 AMAP_BASE_URL = "https://restapi.amap.com"
 # infocodes meaning "slow down" (QPS / concurrency / daily ceiling) — retry once.
@@ -147,7 +148,19 @@ class AMapClient:
                 "page_size": page_size,
             },
         )
-        return _parse_pois(data)
+        pois = _parse_pois(data)
+        _log_poi_search(
+            endpoint="/v5/place/text",
+            params={
+                "keywords": keywords,
+                "region": region,
+                "city_limit": bool(region),
+                "types": types,
+                "page_size": page_size,
+            },
+            pois=pois,
+        )
+        return pois
 
     async def search_poi_around(
         self,
@@ -170,7 +183,20 @@ class AMapClient:
                 "page_size": page_size,
             },
         )
-        return _parse_pois(data)
+        pois = _parse_pois(data)
+        _log_poi_search(
+            endpoint="/v5/place/around",
+            params={
+                "keywords": keywords,
+                "location": _fmt(location),
+                "radius_m": radius_m,
+                "types": types,
+                "sortrule": sortrule,
+                "page_size": page_size,
+            },
+            pois=pois,
+        )
+        return pois
 
     # --- Routing ---------------------------------------------------------
     async def route_driving(
@@ -269,6 +295,27 @@ def _parse_pois(data: Optional[dict]) -> list[POI]:
             )
         )
     return out
+
+
+def _log_poi_search(endpoint: str, params: dict[str, Any], pois: list[POI]) -> None:
+    top_results = [
+        {
+            "name": poi.name,
+            "address": poi.address,
+            "location": _fmt(poi.location),
+            "type": poi.type,
+            "distance_m": poi.distance_m,
+            "rating": poi.rating,
+        }
+        for poi in pois[:5]
+    ]
+    write_debug_log(
+        "AMAP POI SEARCH\n"
+        f"endpoint: {endpoint}\n"
+        f"params: {params}\n"
+        f"result_count: {len(pois)}\n"
+        f"top_results: {top_results}"
+    )
 
 
 def _parse_path_leg(data: Optional[dict], mode: str) -> Optional[Leg]:
