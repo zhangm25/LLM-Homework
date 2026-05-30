@@ -34,6 +34,10 @@ class PlaceSlot(BaseModel):
     city: str = ""
     anchor_label: Optional[str] = None
     anchor_location: Optional[list[float]] = None
+    around: bool = False
+    search_scope: Optional[str] = None
+    anchor_policy: Optional[str] = None
+    ranking_policy: Optional[str] = None
     status: PlaceStatus = "unresolved"
     candidates: list[PlaceCandidate] = Field(default_factory=list)
     selected: Optional[PlaceCandidate] = None

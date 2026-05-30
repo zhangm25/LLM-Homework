@@ -891,6 +891,96 @@ async def check_lunch_search_is_normalized_before_amap():
     assert ("餐厅|饭店|中餐|快餐", [116.192639, 40.244939], 3000, "050000") in fake.around_calls
 
 
+async def check_chain_brand_place_uses_around_scope():
+    class TrackingAMap(FakeAMap):
+        def __init__(self):
+            super().__init__()
+            self.text_calls = []
+            self.around_calls = []
+
+        async def search_poi_text(self, keywords, region=None, types=None, page_size=10):
+            self.text_calls.append((keywords, region, types))
+            return [_poi("麦当劳远店", [116.80, 39.90], rating=4.2)]
+
+        async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                    sortrule="weight", page_size=10):
+            self.around_calls.append((keywords, list(location), radius_m, types))
+            return [_poi("麦当劳近店", [location[0] + 0.001, location[1]], rating=4.6)]
+
+    fake = TrackingAMap()
+    sch.get_amap = lambda: fake
+    intent = IntentObject(
+        constraints=Constraints(start=Endpoint(type="current", location=[116.20, 39.90], source="geolocation")),
+        explicit_pois=[ExplicitPOI(name="麦当劳", fixed_order_index=0)],
+    )
+    resolution = await resolve_place_slots(intent, [116.20, 39.90], "北京")
+    slot = resolution.slots[-1]
+    assert slot.selected and slot.selected.name == "麦当劳近店"
+    assert slot.around is True and slot.search_scope == "around_route"
+    assert ("麦当劳", [116.20, 39.90], 3000, "050000") in fake.around_calls
+    assert not any(call[0] == "麦当劳" for call in fake.text_calls), fake.text_calls
+
+
+async def check_ranked_hotpot_uses_region_search_not_around():
+    class TrackingAMap(FakeAMap):
+        def __init__(self):
+            super().__init__()
+            self.text_calls = []
+            self.around_calls = []
+
+        async def search_poi_text(self, keywords, region=None, types=None, page_size=10):
+            self.text_calls.append((keywords, region, types))
+            return [_poi("高分火锅", [116.60, 39.95], "餐饮服务;中餐厅;火锅店", rating=4.9)]
+
+        async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                    sortrule="weight", page_size=10):
+            self.around_calls.append((keywords, list(location), radius_m, types))
+            return [_poi("附近普通火锅", [location[0] + 0.001, location[1]], rating=4.0)]
+
+    fake = TrackingAMap()
+    sch.get_amap = lambda: fake
+    intent = IntentObject(
+        constraints=Constraints(start=Endpoint(type="current", location=[116.20, 39.90], source="geolocation")),
+        tasks=[Task(id="t1", type="dining", intent="去最好吃的火锅店", dwell_min=60)],
+    )
+    resolution = await resolve_place_slots(intent, [116.20, 39.90], "北京")
+    slot = resolution.slots[-1]
+    assert slot.selected and slot.selected.name == "高分火锅"
+    assert slot.around is False and slot.search_scope == "citywide_ranked"
+    assert ("火锅|火锅店|餐厅", "北京", "050000") in fake.text_calls
+    assert fake.around_calls == []
+
+
+async def check_scenic_relax_uses_ranked_region_search():
+    class TrackingAMap(FakeAMap):
+        def __init__(self):
+            super().__init__()
+            self.text_calls = []
+            self.around_calls = []
+
+        async def search_poi_text(self, keywords, region=None, types=None, page_size=10):
+            self.text_calls.append((keywords, region, types))
+            return [_poi("安静湖边公园", [116.55, 39.98], "风景名胜;公园广场;公园", rating=4.8)]
+
+        async def search_poi_around(self, keywords, location, radius_m=3000, types=None,
+                                    sortrule="weight", page_size=10):
+            self.around_calls.append((keywords, list(location), radius_m, types))
+            return []
+
+    fake = TrackingAMap()
+    sch.get_amap = lambda: fake
+    intent = IntentObject(
+        constraints=Constraints(start=Endpoint(type="current", location=[116.20, 39.90], source="geolocation")),
+        tasks=[Task(id="t1", type="leisure", intent="找个景色好的地方放松", dwell_min=80)],
+    )
+    resolution = await resolve_place_slots(intent, [116.20, 39.90], "北京")
+    slot = resolution.slots[-1]
+    assert slot.selected and slot.selected.name == "安静湖边公园"
+    assert slot.around is False and slot.search_scope == "region_ranked"
+    assert ("公园|湖|观景台|景区", "北京", "110000") in fake.text_calls
+    assert fake.around_calls == []
+
+
 async def check_dining_does_not_use_end_before_future_vague_task():
     class TrackingAMap(FakeAMap):
         def __init__(self):
@@ -1005,6 +1095,9 @@ CHECKS = [
     check_dining_inside_named_area_uses_area_around_search_first,
     check_dining_between_fixed_events_uses_meeting_anchors,
     check_lunch_search_is_normalized_before_amap,
+    check_chain_brand_place_uses_around_scope,
+    check_ranked_hotpot_uses_region_search_not_around,
+    check_scenic_relax_uses_ranked_region_search,
     check_dining_does_not_use_end_before_future_vague_task,
     check_fuzzy_preference_clarify_is_nonblocking,
     check_file_parser_csv_itinerary,

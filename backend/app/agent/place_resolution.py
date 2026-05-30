@@ -27,12 +27,13 @@ from ..planner.scheduler import (
     _resolve_named,
     _resolve_near,
     _resolve_near_anchors,
+    _resolve_region_ranked,
     _task_likely_between_fixed,
     _venue_category,
 )
 from ..tools.amap_client import POI
 from .place_norm import normalize_place_name
-from .search_intent import build_map_search_intent
+from .search_intent import MapSearchIntent, build_map_search_intent
 
 
 def _poi_debug(poi: POI) -> dict:
@@ -241,6 +242,41 @@ def _unique_anchors(*anchors: Optional[list[float]]) -> list[list[float]]:
     return out
 
 
+def _around_enabled(search_intent: Optional[MapSearchIntent]) -> bool:
+    return bool(search_intent and search_intent.search_scope in {"around_anchor", "around_route", "in_area"})
+
+
+async def _resolve_by_search_intent(
+    search_intent: MapSearchIntent,
+    city: str,
+    prev_loc: list[float],
+    anchors: list[list[float]],
+) -> list[POI]:
+    query = search_intent.keyword_param or search_intent.raw_need or "地点"
+    if search_intent.search_scope in {"citywide_ranked", "region_ranked"}:
+        return await _resolve_region_ranked(query, city, types=search_intent.type_param)
+    if search_intent.search_scope == "around_route":
+        route_anchors = anchors or [prev_loc]
+        return await _resolve_near_anchors(
+            query,
+            route_anchors,
+            city,
+            types=search_intent.type_param,
+            radius_m=search_intent.radius_m,
+            fallback_radius_m=search_intent.fallback_radius_m,
+        )
+    if search_intent.search_scope == "around_anchor":
+        return await _resolve_near(
+            query,
+            prev_loc,
+            city,
+            types=search_intent.type_param,
+            radius_m=search_intent.radius_m,
+            fallback_radius_m=search_intent.fallback_radius_m,
+        )
+    return await _resolve_region_ranked(query, city, types=search_intent.type_param)
+
+
 async def resolve_place_slots(
     intent: IntentObject,
     origin: Optional[list[float]],
@@ -358,12 +394,41 @@ async def resolve_place_slots(
             anchors = []
             anchor_note = f"先定位区域「{place}」，再在区域周边搜索归一化后的「{query}」；无结果才退回文本搜索。"
         elif place:
-            strategy = "named_text_search"
-            raw = await _resolve_named_cached(place, city, named_cache)
-            query = place
-            role = "waypoint"
-            anchors = []
-            anchor_note = "明确地点，按名称检索真实 POI。"
+            next_loc = await _lookahead_anchor(
+                targets,
+                target_contexts,
+                target_i,
+                context,
+                city,
+                _context_end_location(context, fixed, end_loc),
+                named_cache,
+            )
+            anchors = _unique_anchors(prev_loc, next_loc)
+            raw_need = f"{place} {task.intent if task else ''}".strip()
+            search_intent = await build_map_search_intent(
+                task=task,
+                raw_need=raw_need,
+                category_hint=category,
+                city=city,
+                mode="named_or_fuzzy_place",
+                anchors=anchors,
+                place=place,
+            )
+            if search_intent.search_scope == "exact_place":
+                strategy = "named_text_search"
+                raw = await _resolve_named_cached(place, city, named_cache)
+                query = place
+                anchor_note = "明确地点，按名称检索真实 POI。"
+            else:
+                query = search_intent.keyword_param or place
+                strategy = f"{search_intent.search_scope}_search"
+                raw = await _resolve_by_search_intent(search_intent, city, prev_loc, anchors)
+                anchor_note = (
+                    "地点文本被判定为品牌/品类/偏好型需求，按搜索范围策略执行，避免把它当成唯一 POI 做全城 text 命中。"
+                )
+            role = "activity_poi" if search_intent.search_scope != "exact_place" else "waypoint"
+            if search_intent.search_scope in {"citywide_ranked", "region_ranked"}:
+                anchors = []
         else:
             raw_query = (
                 category
@@ -381,15 +446,27 @@ async def resolve_place_slots(
                     named_cache,
                 )
                 anchors = _unique_anchors(prev_loc, next_loc)
-                search_intent = await build_map_search_intent(
-                    task=task,
-                    raw_need=task.intent if task else raw_query,
-                    category_hint=raw_query,
-                    city=city,
-                    mode="route_anchor_around",
-                    anchors=anchors,
-                )
-                query = search_intent.keyword_param or raw_query
+            else:
+                anchors = _unique_anchors(prev_loc)
+            search_intent = await build_map_search_intent(
+                task=task,
+                raw_need=task.intent if task else raw_query,
+                category_hint=raw_query,
+                city=city,
+                mode="route_anchor_around" if _is_route_anchored_activity(task, category) else "previous_anchor_around",
+                anchors=anchors,
+            )
+            query = search_intent.keyword_param or raw_query
+            if search_intent.search_scope in {"citywide_ranked", "region_ranked"}:
+                strategy = f"{search_intent.search_scope}_search"
+                anchor_note = "偏好/优选型模糊任务，不强制贴近上一站；在城市/区域内按匹配度和评分搜索。"
+                raw = await _resolve_by_search_intent(search_intent, city, prev_loc, [])
+                anchors = []
+            elif search_intent.search_scope in {"around_route", "around_anchor"}:
+                strategy = f"{search_intent.search_scope}_search"
+                anchor_note = "附近/顺路/品牌或品类型任务，围绕路线锚点周边搜索，避免地点过远。"
+                raw = await _resolve_by_search_intent(search_intent, city, prev_loc, anchors)
+            elif _is_route_anchored_activity(task, category):
                 strategy = "route_anchor_around_search"
                 anchor_note = "餐饮/咖啡/茶等路线型模糊任务，围绕同一排程上下文中的上一站和下一站锚点周边搜索。"
                 raw = (
@@ -412,16 +489,6 @@ async def resolve_place_slots(
                     )
                 )
             else:
-                anchors = _unique_anchors(prev_loc)
-                search_intent = await build_map_search_intent(
-                    task=task,
-                    raw_need=task.intent if task else raw_query,
-                    category_hint=raw_query,
-                    city=city,
-                    mode="previous_anchor_around",
-                    anchors=anchors,
-                )
-                query = search_intent.keyword_param or raw_query
                 strategy = "previous_anchor_around_search"
                 anchor_note = "普通模糊活动，围绕上一站周边搜索。"
                 raw = await _resolve_near(
@@ -447,6 +514,7 @@ async def resolve_place_slots(
             schedule_context=context,
             anchor_location=prev_loc,
             route_anchors=anchors,
+            around=_around_enabled(search_intent),
             note=anchor_note,
             candidates=[_poi_debug(p) for p in raw[:5]],
         )
@@ -457,6 +525,10 @@ async def resolve_place_slots(
             query=query,
             city=city,
             anchor_location=prev_loc,
+            around=_around_enabled(search_intent),
+            search_scope=search_intent.search_scope if search_intent else None,
+            anchor_policy=search_intent.anchor_policy if search_intent else None,
+            ranking_policy=search_intent.ranking_policy if search_intent else None,
             status="unresolved",
             candidates=[_candidate(p) for p in raw[:5]],
             needs_user_choice=len(raw) > 1,

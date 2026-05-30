@@ -104,6 +104,10 @@ export interface PlaceSlot {
   city: string;
   anchor_label: string | null;
   anchor_location: [number, number] | null;
+  around: boolean;
+  search_scope: string | null;
+  anchor_policy: string | null;
+  ranking_policy: string | null;
   status: "selected" | "candidates_ready" | "unresolved" | "skipped";
   candidates: PlaceCandidate[];
   selected: PlaceCandidate | null;

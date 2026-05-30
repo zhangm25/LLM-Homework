@@ -464,6 +464,20 @@ async def _resolve_near_anchors(
     return _rank(_dedupe_pois(cands))
 
 
+async def _resolve_region_ranked(query: str, city: str, types: Optional[str] = None) -> list[POI]:
+    """A broad ranked search within the requested city/region.
+
+    Used when the user asks for "best/highly rated/scenic" rather than "nearby".
+    We still restrict to the city and rank locally so a fuzzy query does not
+    become an arbitrary far-away route anchor.
+    """
+    amap = get_amap()
+    if not amap.enabled:
+        return []
+    cands = await amap.search_poi_text(query, region=city, types=types, page_size=20)
+    return _rank(_dedupe_pois(cands))
+
+
 async def _leg_for(a: list[float], b: list[float]) -> tuple[Optional[Leg], str]:
     """Return (leg, human text). Picks walking vs driving by distance ("auto")."""
     amap = get_amap()
