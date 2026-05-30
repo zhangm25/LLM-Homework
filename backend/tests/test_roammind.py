@@ -580,6 +580,8 @@ async def check_ambiguous_end_offers_origin_guess():
     assert clar and "下面的猜测" in clar
     assert options and options[0].label == "回到当前位置"
     assert "终点是 当前位置A" in options[0].message
+    assert options[0].message.startswith("我选：")
+    assert req.message not in options[0].message
 
 
 async def check_current_start_unknown_clarifies():
@@ -593,6 +595,8 @@ async def check_current_start_unknown_clarifies():
     assert "clarify" in types and "plan" not in types, types
     assert clar and "拿不到你的当前位置" in clar
     assert options and options[0].label == "从 三里屯"
+    assert options[0].message.startswith("我选：")
+    assert req.message not in options[0].message
 
 
 async def check_clarify_answer_completes_prior_intent():
@@ -691,6 +695,8 @@ async def check_school_endpoint_choice_clarify():
     assert clar and "中国科学院大学" in clar and "终点" in clar
     assert len(options) == 2
     assert "雁栖湖校区" in options[0].label and "怀柔" in options[0].description
+    assert all(opt.message.startswith("我选：") for opt in options)
+    assert all("下午先去南锣鼓巷逛逛" not in opt.message for opt in options)
 
     # Clicking a concrete campus should continue planning, not ask the same question again.
     types2, _, _ = await _stream_clarify(options[0].message, scripted)
@@ -708,6 +714,8 @@ async def check_school_start_choice_clarify():
     assert "clarify" in types and "plan" not in types, types
     assert clar and "中国科学院大学" in clar and "起点" in clar
     assert len(options) == 2
+    assert all(opt.message.startswith("我选：") for opt in options)
+    assert all("去三里屯逛逛" not in opt.message for opt in options)
 
 
 async def check_geolocated_school_start_does_not_clarify():

@@ -594,7 +594,6 @@ def _start_clarification(req: ChatRequest, intent: IntentObject) -> tuple[str, l
     start = intent.constraints.start
     if start.type == "named" and start.value:
         return None
-    base = req.message.strip()
     options: list[ClarifyOption] = []
     first_place = next((p.name for p in intent.explicit_pois if p.name), None)
     if first_place:
@@ -602,7 +601,7 @@ def _start_clarification(req: ChatRequest, intent: IntentObject) -> tuple[str, l
             id="start-first-place",
             label=f"从 {first_place}",
             description="把行程中第一个明确地点当作出发点。",
-            message=f"{base}\n\n我选：起点是 {first_place}",
+            message=f"我选：起点是 {first_place}",
         ))
     question = (
         "我还拿不到你的当前位置，所以「从这里」暂时不可导航。"
@@ -636,7 +635,6 @@ def _end_clarification(req: ChatRequest, intent: IntentObject) -> tuple[str, lis
     phrase = _ambiguous_return_phrase(req.message, intent)
     if not phrase:
         return None
-    base = req.message.strip()
     options: list[ClarifyOption] = []
     start = intent.constraints.start
     if start.type == "named" and start.value:
@@ -644,7 +642,7 @@ def _end_clarification(req: ChatRequest, intent: IntentObject) -> tuple[str, lis
             id="end-start",
             label="回到起点",
             description=f"终点按「{start.value}」处理。",
-            message=f"{base}\n\n我选：终点是 {start.value}",
+            message=f"我选：终点是 {start.value}",
         ))
     elif req.origin:
         label = req.origin.label or "当前位置"
@@ -652,7 +650,7 @@ def _end_clarification(req: ChatRequest, intent: IntentObject) -> tuple[str, lis
             id="end-origin",
             label="回到当前位置",
             description=label,
-            message=f"{base}\n\n我选：终点是 {label}",
+            message=f"我选：终点是 {label}",
         ))
     question = (
         f"你提到最后要回「{phrase}」，但这还不是一个可导航的具体终点。"
@@ -707,7 +705,6 @@ def _needs_school_choice(place: str) -> bool:
 
 
 def _place_choice_options(req: ChatRequest, role: str, place: str, pois) -> list[ClarifyOption]:
-    base = req.message.strip()
     label = "起点" if role == "start" else "终点"
     options: list[ClarifyOption] = []
     for i, p in enumerate(pois[:4], start=1):
@@ -716,7 +713,7 @@ def _place_choice_options(req: ChatRequest, role: str, place: str, pois) -> list
             id=f"{role}-place-{i}",
             label=p.name,
             description=address,
-            message=f"{base}\n\n我选：{label}是 {p.name} {address}",
+            message=f"我选：{label}是 {p.name} {address}",
         ))
     return options
 
@@ -771,50 +768,48 @@ async def _place_choice_issue(req: ChatRequest, intent: IntentObject) -> dict | 
 
 
 def _dining_choice_options(req: ChatRequest, task: Task) -> list[ClarifyOption]:
-    base = req.message.strip()
     city_hint = f"在{req.city}" if req.city else ""
     return [
         ClarifyOption(
             id="dining-light",
             label="清淡稳妥",
             description="评分优先，不太油腻，适合不赶时间吃一顿。",
-            message=f"{base}\n\n我选：餐厅偏好=清淡稳妥，评分优先，别太油腻。{city_hint}",
+            message=f"我选：餐厅偏好=清淡稳妥，评分优先，别太油腻。{city_hint}",
         ),
         ClarifyOption(
             id="dining-local",
             label="当地特色",
             description="优先找有地域特色或招牌菜的店。",
-            message=f"{base}\n\n我选：餐厅偏好=当地特色/招牌菜，评分优先。{city_hint}",
+            message=f"我选：餐厅偏好=当地特色/招牌菜，评分优先。{city_hint}",
         ),
         ClarifyOption(
             id="dining-fast",
             label="省时方便",
             description="路线上顺、不排队、出餐快优先。",
-            message=f"{base}\n\n我选：餐厅偏好=省时方便，离路线近，不排队，出餐快。{city_hint}",
+            message=f"我选：餐厅偏好=省时方便，离路线近，不排队，出餐快。{city_hint}",
         ),
     ]
 
 
 def _mood_choice_options(req: ChatRequest, intent: IntentObject) -> list[ClarifyOption]:
-    base = req.message.strip()
     return [
         ClarifyOption(
             id="mood-quiet",
             label="安静放松",
             description="咖啡、书店、公园这类低噪声去处。",
-            message=f"{base}\n\n我选：偏好=安静放松，少排队，少走路。",
+            message="我选：偏好=安静放松，少排队，少走路。",
         ),
         ClarifyOption(
             id="mood-citywalk",
             label="轻量逛逛",
             description="路线顺、可步行衔接，保留一点城市探索感。",
-            message=f"{base}\n\n我选：偏好=轻量 city walk，路线顺，不要太累。",
+            message="我选：偏好=轻量 city walk，路线顺，不要太累。",
         ),
         ClarifyOption(
             id="mood-view",
             label="景观收尾",
             description="傍晚或夜景作为最后一站。",
-            message=f"{base}\n\n我选：偏好=景观收尾，傍晚或夜景，前面安排轻松一点。",
+            message="我选：偏好=景观收尾，傍晚或夜景，前面安排轻松一点。",
         ),
     ]
 
