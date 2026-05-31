@@ -179,32 +179,32 @@ place_resolution = await resolve_place_slots(intent, origin, city)
 
 ```mermaid
 flowchart TD
-    A["IntentObject + origin + city"] --> B["创建 start/end/fixed slots"]
-    B --> C{"起点已有坐标?"}
-    C -->|有| D["直接 selected<br/>不调用地图搜索"]
-    C -->|无，named| E["高德 text search<br/>_resolve_named_slot"]
-    C -->|current + origin 可用| D
+    A[IntentObject、origin、city] --> B[创建 start、end、fixed 地点槽]
+    B --> C{起点是否已有坐标}
+    C -- 是 --> D[直接选中起点，不调用地图搜索]
+    C -- named 起点 --> E[高德文本搜索起点]
+    C -- current 且 origin 可用 --> D
 
-    B --> F["解析 fixed_events<br/>按名称搜索真实地点"]
-    F --> G["构建 grounding targets<br/>explicit_pois + tasks"]
+    B --> F[解析固定日程地点，按名称搜索]
+    F --> G[构建 grounding targets，包括 explicit pois 和 tasks]
 
-    G --> H["为每个 target 判断上下文<br/>free / between fixed / after fixed"]
-    H --> I["确定 previous / next anchor"]
-    I --> J{"地点类型"}
+    G --> H[判断每个 target 的排程上下文]
+    H --> I[确定 previous anchor 和 next anchor]
+    I --> J{地点类型}
 
-    J -->|"明确地点"| K["exact_place<br/>城市/区域 text search<br/>不设 radius"]
-    J -->|"命名区域里的活动"| L["in_area<br/>先定位区域，再周边搜索业态"]
-    J -->|"附近/顺路/品牌/品类"| M["around_anchor / around_route<br/>围绕上一站/下一站搜索"]
-    J -->|"最好/高分/景色好"| N["region_ranked / citywide_ranked<br/>区域内排名搜索"]
+    J -- 明确地点 --> K[exact_place，城市文本搜索，不使用半径]
+    J -- 命名区域里的活动 --> L[in_area，先定位区域，再周边搜索业态]
+    J -- 附近、顺路、品牌或品类 --> M[around_anchor 或 around_route，围绕路线锚点搜索]
+    J -- 最好、高分、景色好 --> N[region_ranked 或 citywide_ranked，区域内排名搜索]
 
-    K --> O["候选 POI 列表"]
+    K --> O[候选 POI 列表]
     L --> O
     M --> O
     N --> O
 
-    O --> P["选择默认候选 candidates[0]"]
-    P --> Q["回写 Intent<br/>task.location / explicit.location / endpoint.location"]
-    Q --> R["PlaceResolution<br/>slots + candidates + selected"]
+    O --> P[选择默认候选，即候选列表第一项]
+    P --> Q[回写 Intent 中的 task、explicit poi 或 endpoint 坐标]
+    Q --> R[输出 PlaceResolution，包含 slots、candidates、selected]
 ```
 
 ### 3.2 搜索意图归一化
