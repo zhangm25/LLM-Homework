@@ -173,6 +173,8 @@ export interface AppConfig {
     message: string;
   };
   amap_web_enabled: boolean;
+  amap_js_key?: string;
+  amap_js_security_code?: string;
   default_city: string;
   scenarios: string[];
 }

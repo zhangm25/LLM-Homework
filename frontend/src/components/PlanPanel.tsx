@@ -14,6 +14,8 @@ export default function PlanPanel({
   swappingIndex,
   mapExpanded = false,
   onToggleMapExpanded,
+  amapJsKey = "",
+  amapJsSecurityCode = "",
 }: {
   plan: Plan | null;
   onRelocate?: () => void;
@@ -23,6 +25,8 @@ export default function PlanPanel({
   swappingIndex?: number | null;
   mapExpanded?: boolean;
   onToggleMapExpanded?: () => void;
+  amapJsKey?: string;
+  amapJsSecurityCode?: string;
 }) {
   const slots = useMemo(() => orderedPlaceSlots(plan), [plan]);
   const [activeSlotId, setActiveSlotId] = useState<string | null>(null);
@@ -82,6 +86,8 @@ export default function PlanPanel({
               routePolyline={plan.summary.polyline}
               routeSegments={plan.summary.segments}
               candidateFocus={candidateFocus}
+              amapJsKey={amapJsKey}
+              amapJsSecurityCode={amapJsSecurityCode}
             />
           </div>
           <PlaceResolutionSummary

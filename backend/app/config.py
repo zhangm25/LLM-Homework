@@ -1,13 +1,14 @@
 """Application configuration.
 
-All secrets live in a single project-root ``.env`` file (see ``.env.example``).
-The backend only reads the server-side keys from it; the ``VITE_*`` entries in
-the same file are consumed by the frontend build and ignored here
-(``extra="ignore"``).
+All secrets live in a single project-root ``.env`` file (see ``.env.example``)
+or in the external file pointed to by ``ROAMMIND_ENV_FILE``. Server-side keys
+stay in the backend; the browser-side AMap JS config is exposed explicitly via
+``/api/config`` so release builds can be configured after packaging.
 """
 
 from __future__ import annotations
 
+import os
 from functools import lru_cache
 from pathlib import Path
 
@@ -15,14 +16,24 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 # backend/app/config.py -> parents[2] == repository root
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+_EXTERNAL_ENV_FILE = os.environ.get("ROAMMIND_ENV_FILE")
+_ENV_FILES = tuple(
+    Path(p)
+    for p in (
+        _EXTERNAL_ENV_FILE,
+        PROJECT_ROOT / ".env",
+        PROJECT_ROOT / "backend" / ".env",
+    )
+    if p
+)
 
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
-        # Search order: root .env (the single file the user fills in), then a
+        # Search order: an explicit external file, then root .env, then a
         # backend-local override if present. Absolute paths so it works
         # regardless of the process working directory.
-        env_file=(PROJECT_ROOT / ".env", PROJECT_ROOT / "backend" / ".env"),
+        env_file=_ENV_FILES,
         env_file_encoding="utf-8",
         case_sensitive=False,
         extra="ignore",
@@ -51,6 +62,11 @@ class Settings(BaseSettings):
 
     # --- AMap (Web Service API, server side) ------------------------------
     amap_web_service_key: str = ""
+    # --- AMap JS API (public browser-side config) -------------------------
+    # These are not backend secrets. They are exposed via /api/config so a
+    # release build can be configured by an external .env file after packaging.
+    vite_amap_js_key: str = ""
+    vite_amap_js_security_code: str = ""
 
     # --- Runtime knobs ----------------------------------------------------
     request_timeout_s: float = 15.0  # AMap HTTP calls (should be fast)

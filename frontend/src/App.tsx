@@ -424,6 +424,8 @@ export default function App() {
           swappingIndex={swappingIndex}
           mapExpanded={mapExpanded}
           onToggleMapExpanded={() => setMapExpanded((v) => !v)}
+          amapJsKey={config?.amap_js_key ?? ""}
+          amapJsSecurityCode={config?.amap_js_security_code ?? ""}
         />
       </div>
 

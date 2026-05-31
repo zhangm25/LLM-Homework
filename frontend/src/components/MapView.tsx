@@ -2,9 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import AMapLoader from "@amap/amap-jsapi-loader";
 import type { PlaceCandidate, RouteSegment, Stop } from "../types";
 
-const JS_KEY = import.meta.env.VITE_AMAP_JS_KEY;
-const SECURITY_CODE = import.meta.env.VITE_AMAP_JS_SECURITY_CODE;
-
 const W = 640;
 const H = 300;
 const PAD = 70;
@@ -216,23 +213,27 @@ export default function MapView({
   routePolyline = [],
   routeSegments = [],
   candidateFocus = null,
+  amapJsKey = "",
+  amapJsSecurityCode = "",
 }: {
   stops: Stop[];
   routePolyline?: LngLat[];
   routeSegments?: RouteSegment[];
   candidateFocus?: CandidateFocus | null;
+  amapJsKey?: string;
+  amapJsSecurityCode?: string;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const [failed, setFailed] = useState(false);
-  const useReal = Boolean(JS_KEY) && !failed;
+  const useReal = Boolean(amapJsKey) && !failed;
 
   useEffect(() => {
     if (!useReal || !ref.current) return;
     let cancelled = false;
     let map: any = null;
 
-    if (SECURITY_CODE) window._AMapSecurityConfig = { securityJsCode: SECURITY_CODE };
-    AMapLoader.load({ key: JS_KEY as string, version: "2.0", plugins: [] })
+    if (amapJsSecurityCode) window._AMapSecurityConfig = { securityJsCode: amapJsSecurityCode };
+    AMapLoader.load({ key: amapJsKey, version: "2.0", plugins: [] })
       .then((AMap: any) => {
         if (cancelled || !ref.current) return;
         map = new AMap.Map(ref.current, { zoom: 12, viewMode: "2D", mapStyle: "amap://styles/whitesmoke" });
@@ -294,7 +295,7 @@ export default function MapView({
       cancelled = true;
       if (map) map.destroy();
     };
-  }, [stops, routePolyline, routeSegments, useReal, candidateFocus]);
+  }, [stops, routePolyline, routeSegments, useReal, candidateFocus, amapJsKey, amapJsSecurityCode]);
 
   return (
     <div className="mapwrap">

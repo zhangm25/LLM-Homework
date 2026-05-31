@@ -67,6 +67,14 @@ LLM-Homework/
 
 ## 快速开始
 
+如果只是给用户安装使用，推荐直接生成发布包：发布包会内置已构建好的前端页面，运行时只需要 Python 和一个外部配置文件，不会包含本机 `.env` 或真实 API Key。
+
+```bash
+python scripts/build_release.py
+```
+
+生成结果位于 `dist_release/RoamMind-0.1.0/` 和 `dist_release/RoamMind-0.1.0.zip`。详细安装和运行步骤见 [`docs/RELEASE_RUN_GUIDE.md`](./docs/RELEASE_RUN_GUIDE.md)。
+
 ### 0. 配置 Key（可选，留空即示例模式）
 
 ```bash

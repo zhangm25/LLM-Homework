@@ -60,6 +60,8 @@ async def config() -> dict:
         "llm_enabled": settings.llm_enabled,
         "llm": llm_health,
         "amap_web_enabled": settings.amap_enabled,
+        "amap_js_key": settings.vite_amap_js_key,
+        "amap_js_security_code": settings.vite_amap_js_security_code,
         "default_city": settings.default_city,
         "scenarios": list(SCENARIO_KEYWORDS.keys()),
     }
